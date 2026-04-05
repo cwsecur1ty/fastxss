@@ -12,127 +12,141 @@ pub enum OutputFormat {
 #[command(
     name = "fastxss",
     version,
-    about = "Fast, comprehensive XSS vulnerability scanner",
-    long_about = "A Rust-based XSS scanner supporting reflected, stored, DOM-based, and blind/out-of-band XSS detection."
+    about = "Fast XSS vulnerability scanner",
+    long_about = None,
+    after_help = "\x1b[1mEXAMPLES:\x1b[0m
+  fastxss -t https://example.com                              Basic scan
+  fastxss -t https://example.com --disable-dom --disable-blind  Reflected only (fast)
+  fastxss -t https://example.com --test-apis --test-graphql   Include API scanning
+  fastxss -t https://example.com --output-format html -o report.html
+  fastxss -t https://example.com --cookie \"session=abc123\"
+  fastxss -t https://example.com --auth-url https://example.com/login --auth-user admin --auth-pass secret
+  fastxss -t https://example.com --proxy http://127.0.0.1:8080 --insecure"
 )]
 pub struct Config {
+    // ── Target ──────────────────────────────────────────────
     /// Target URL to scan
     #[arg(short, long)]
     pub target: String,
 
-    /// Maximum concurrent requests
+    // ── Scan Scope ──────────────────────────────────────────
+    /// Max concurrent requests [default: 50]
     #[arg(short, long, default_value = "50")]
     pub concurrency: usize,
 
-    /// Maximum crawl depth
+    /// Max crawl depth [default: 10]
     #[arg(long, default_value = "10")]
     pub crawl_depth: usize,
 
-    /// Comma-separated allowed domains for scope restriction
+    /// Allowed domains (comma-separated)
     #[arg(long, value_delimiter = ',')]
     pub scope: Vec<String>,
 
-    /// Output format
-    #[arg(long, default_value = "terminal")]
-    pub output_format: OutputFormat,
-
-    /// Output file path
-    #[arg(short, long)]
-    pub output_file: Option<PathBuf>,
-
-    /// HTTP/SOCKS5 proxy URL
-    #[arg(long)]
-    pub proxy: Option<String>,
-
-    /// Custom headers (format: "Key: Value"), can be repeated
-    #[arg(long, value_delimiter = ',')]
-    pub headers: Vec<String>,
-
-    /// Cookie string to include with requests
-    #[arg(long)]
-    pub cookie: Option<String>,
-
-    /// Login URL for authenticated scanning
-    #[arg(long)]
-    pub auth_url: Option<String>,
-
-    /// Username for form-based authentication
-    #[arg(long)]
-    pub auth_user: Option<String>,
-
-    /// Password for form-based authentication
-    #[arg(long)]
-    pub auth_pass: Option<String>,
-
-    /// Bearer token for API authentication (sent as Authorization header)
-    #[arg(long)]
-    pub bearer_token: Option<String>,
-
-    /// Custom payload wordlist path
-    #[arg(long)]
-    pub wordlist: Option<PathBuf>,
-
-    /// Custom parameter wordlist for hidden parameter discovery
-    #[arg(long)]
-    pub param_wordlist: Option<PathBuf>,
-
-    /// Blind XSS callback server port
-    #[arg(long, default_value = "8844")]
-    pub callback_port: u16,
-
-    /// External host/IP for blind XSS callbacks
-    #[arg(long)]
-    pub callback_host: Option<String>,
-
-    /// Maximum requests per second
+    /// Requests per second limit [default: 100]
     #[arg(long, default_value = "100")]
     pub rate_limit: u32,
 
-    /// Honor robots.txt rules
-    #[arg(long)]
-    pub respect_robots: bool,
-
-    /// Delay between requests in milliseconds
+    /// Delay between requests (ms) [default: 0]
     #[arg(long, default_value = "0")]
     pub delay_ms: u64,
 
-    /// Skip DOM-based XSS scanning (no headless browser)
-    #[arg(long)]
-    pub disable_dom: bool,
-
-    /// Skip blind/OOB XSS scanning
-    #[arg(long)]
-    pub disable_blind: bool,
-
-    /// Skip stored XSS scanning
-    #[arg(long)]
-    pub disable_stored: bool,
-
-    /// Request timeout in seconds
+    /// Request timeout (seconds) [default: 30]
     #[arg(long, default_value = "30")]
     pub timeout_secs: u64,
 
-    /// Increase verbosity (-v, -vv, -vvv)
-    #[arg(short, long, action = clap::ArgAction::Count)]
-    pub verbose: u8,
-
-    /// Accept invalid TLS certificates (for testing environments)
-    #[arg(long)]
-    pub insecure: bool,
-
-    /// Maximum retry attempts for transient HTTP errors (429, 503, etc.)
+    /// Retry attempts on 429/5xx errors [default: 3]
     #[arg(long, default_value = "3")]
     pub max_retries: u32,
 
-    /// Enable API endpoint probing (/api/, /swagger.json, etc.)
+    /// Honor robots.txt
     #[arg(long)]
+    pub respect_robots: bool,
+
+    // ── Authentication ──────────────────────────────────────
+    /// Login page URL for form-based auth
+    #[arg(long, help_heading = "Authentication")]
+    pub auth_url: Option<String>,
+
+    /// Login username/email
+    #[arg(long, help_heading = "Authentication")]
+    pub auth_user: Option<String>,
+
+    /// Login password
+    #[arg(long, help_heading = "Authentication")]
+    pub auth_pass: Option<String>,
+
+    /// Bearer token (adds Authorization header)
+    #[arg(long, help_heading = "Authentication")]
+    pub bearer_token: Option<String>,
+
+    /// Cookie string to include
+    #[arg(long, help_heading = "Authentication")]
+    pub cookie: Option<String>,
+
+    // ── Scanner Modules ─────────────────────────────────────
+    /// Skip DOM-based XSS (no headless browser)
+    #[arg(long, help_heading = "Scanners")]
+    pub disable_dom: bool,
+
+    /// Skip blind/OOB XSS
+    #[arg(long, help_heading = "Scanners")]
+    pub disable_blind: bool,
+
+    /// Skip stored XSS
+    #[arg(long, help_heading = "Scanners")]
+    pub disable_stored: bool,
+
+    /// Probe API endpoints (/api/, /swagger.json, etc.)
+    #[arg(long, help_heading = "Scanners")]
     pub test_apis: bool,
 
-    /// Enable GraphQL introspection and argument testing
-    #[arg(long)]
+    /// Run GraphQL introspection + argument testing
+    #[arg(long, help_heading = "Scanners")]
     pub test_graphql: bool,
 
-    /// Wait time in seconds for blind XSS callbacks after scanning completes
-    #[arg(long, default_value = "10")]
+    // ── Output ──────────────────────────────────────────────
+    /// Output format: json, html, terminal [default: terminal]
+    #[arg(long, default_value = "terminal", help_heading = "Output")]
+    pub output_format: OutputFormat,
+
+    /// Write report to file
+    #[arg(short, long, help_heading = "Output")]
+    pub output_file: Option<PathBuf>,
+
+    /// Verbosity (-v info, -vv debug, -vvv trace)
+    #[arg(short, long, action = clap::ArgAction::Count, help_heading = "Output")]
+    pub verbose: u8,
+
+    // ── Advanced ────────────────────────────────────────────
+    /// HTTP/SOCKS5 proxy
+    #[arg(long, help_heading = "Advanced")]
+    pub proxy: Option<String>,
+
+    /// Custom headers ("Key: Value", comma-separated)
+    #[arg(long, value_delimiter = ',', help_heading = "Advanced")]
+    pub headers: Vec<String>,
+
+    /// Custom XSS payload wordlist
+    #[arg(long, help_heading = "Advanced")]
+    pub wordlist: Option<PathBuf>,
+
+    /// Parameter mining wordlist
+    #[arg(long, help_heading = "Advanced")]
+    pub param_wordlist: Option<PathBuf>,
+
+    /// Blind XSS callback port [default: 8844]
+    #[arg(long, default_value = "8844", help_heading = "Advanced")]
+    pub callback_port: u16,
+
+    /// External host for blind XSS callbacks
+    #[arg(long, help_heading = "Advanced")]
+    pub callback_host: Option<String>,
+
+    /// Blind callback wait time (seconds) [default: 10]
+    #[arg(long, default_value = "10", help_heading = "Advanced")]
     pub blind_wait_secs: u64,
+
+    /// Accept invalid TLS certificates
+    #[arg(long, help_heading = "Advanced")]
+    pub insecure: bool,
 }
