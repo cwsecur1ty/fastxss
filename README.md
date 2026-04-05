@@ -4,13 +4,12 @@
 
 **Advanced XSS Vulnerability Scanner**
 
-[![release](https://img.shields.io/badge/release-v0.2.0-blue)](https://github.com/cwsecur1ty/fastxss/releases)
 [![build](https://img.shields.io/badge/build-passing-brightgreen)]()
 [![language](https://img.shields.io/badge/language-Rust-orange)](https://www.rust-lang.org/)
-[![license](https://img.shields.io/badge/license-GPL--3.0-green)](LICENSE)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-Fast, comprehensive cross-site scripting detection built in Rust.
-Reflected, stored, DOM-based, and blind/out-of-band XSS — all in one tool.
+Fast, cross-site scripting detection built in Rust.
+Reflected, stored, DOM-based, and blind/out-of-band XSS. All in one tool.
 
 ---
 
@@ -135,4 +134,4 @@ This tool is intended for **authorized security testing only**. Always obtain wr
 
 ## License
 
-[GPL-3.0](LICENSE)
+[MIT](LICENSE)
