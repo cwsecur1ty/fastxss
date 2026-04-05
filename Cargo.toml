@@ -1,0 +1,50 @@
+[package]
+name = "fastxss"
+version = "0.1.0"
+edition = "2021"
+description = "Fast, comprehensive XSS vulnerability scanner"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "cookies", "gzip", "brotli", "socks"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# HTML parsing
+scraper = "0.21"
+
+# Headless browser for DOM-based XSS
+chromiumoxide = "0.9"
+futures = "0.3"
+
+# Callback server for blind XSS
+axum = "0.7"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging / output
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+colored = "2"
+indicatif = "0.17"
+
+# Utilities
+url = { version = "2", features = ["serde"] }
+regex = "1"
+rand = "0.8"
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "1"
+anyhow = "1"
+dashmap = "6"
+governor = "0.6"
+robots_txt = "0.7"
+percent-encoding = "2"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
