@@ -90,6 +90,10 @@ impl Scanner for ReflectedScanner {
                     self.scan_header(target, injection_point, payload_engine, http_client)
                         .await
                 }
+                ParamLocation::Cookie => {
+                    self.scan_cookie(target, injection_point, payload_engine, http_client)
+                        .await
+                }
                 _ => Vec::new(),
             };
             findings.extend(point_findings);
@@ -431,6 +435,98 @@ impl ReflectedScanner {
                         method: "GET".to_string(),
                         url: target.url.to_string(),
                         headers,
+                        body: None,
+                    },
+                    resp_status,
+                    Some(resp_context),
+                ));
+
+                break;
+            }
+        }
+
+        findings
+    }
+
+    async fn scan_cookie(
+        &self,
+        target: &CrawlResult,
+        point: &InjectionPoint,
+        engine: &PayloadEngine,
+        client: &HttpClient,
+    ) -> Vec<Finding> {
+        // Phase 1: Probe cookie reflection
+        let probe = engine.reflection_probe();
+        let cookie_header = format!("{}={}", point.name, probe.payload);
+        let headers = vec![("Cookie".to_string(), cookie_header.clone())];
+
+        let resp = match client
+            .request("GET", target.url.as_str(), Some(&headers), None)
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+
+        let _status = resp.status().as_u16();
+        let body = match resp.text().await {
+            Ok(b) => b,
+            Err(_) => return Vec::new(),
+        };
+
+        let canary_pos = match body.find(&probe.canary) {
+            Some(pos) => pos,
+            None => return Vec::new(),
+        };
+
+        // Phase 2: targeted payloads
+        let context = detect_context(&body, canary_pos);
+        info!(
+            "Cookie reflection found: '{}' on {} (context: {:?})",
+            point.name,
+            target.url,
+            context_name(&context)
+        );
+
+        let payloads = engine.reflected_payloads_for_context(&context);
+        let mut findings = Vec::new();
+
+        for gp in payloads.iter().take(10) {
+            let cookie_val = format!("{}={}", point.name, gp.payload);
+            let headers = vec![("Cookie".to_string(), cookie_val)];
+
+            let resp = match client
+                .request("GET", target.url.as_str(), Some(&headers), None)
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+
+            let resp_status = resp.status().as_u16();
+            let resp_body = match resp.text().await {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+
+            if let Some(pos) = resp_body.find(&gp.canary) {
+                let resp_context = detect_context(&resp_body, pos);
+                let (severity, confidence) =
+                    assess_reflected_severity(&resp_body, gp, &resp_context, None);
+                let evidence = extract_evidence(&resp_body, pos, 100);
+
+                findings.push(Finding::new(
+                    ScannerType::Reflected,
+                    severity,
+                    confidence,
+                    target.url.to_string(),
+                    point.clone(),
+                    gp.payload.clone(),
+                    evidence,
+                    RequestRecord {
+                        method: "GET".to_string(),
+                        url: target.url.to_string(),
+                        headers: vec![("Cookie".to_string(), format!("{}=<payload>", point.name))],
                         body: None,
                     },
                     resp_status,

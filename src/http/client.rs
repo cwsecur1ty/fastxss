@@ -52,6 +52,14 @@ impl HttpClient {
             );
         }
 
+        if let Some(ref token) = config.bearer_token {
+            default_headers.insert(
+                reqwest::header::AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {}", token))
+                    .context("Invalid bearer token")?,
+            );
+        }
+
         if !default_headers.is_empty() {
             builder = builder.default_headers(default_headers);
         }
@@ -133,6 +141,16 @@ impl HttpClient {
         let url = url.to_string();
         let data = form_data.clone();
         self.execute_with_retry(|| self.client.post(&url).form(&data)).await
+    }
+
+    pub async fn post_json(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+    ) -> Result<reqwest::Response> {
+        let url = url.to_string();
+        let data = body.clone();
+        self.execute_with_retry(|| self.client.post(&url).json(&data)).await
     }
 
     pub async fn request(

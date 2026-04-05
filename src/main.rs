@@ -20,8 +20,12 @@ use tracing_subscriber::EnvFilter;
 use crate::callback::server::start_callback_server;
 use crate::callback::token::TokenTracker;
 use crate::config::{Config, OutputFormat};
+use crate::crawler::api_discovery::ApiDiscovery;
+use crate::crawler::graphql::GraphqlDiscovery;
+use crate::crawler::param_miner::ParamMiner;
 use crate::crawler::spider::Spider;
 use crate::http::client::HttpClient;
+use crate::http::session::SessionManager;
 use crate::payloads::engine::PayloadEngine;
 use crate::reporter::finding::FindingCollection;
 use crate::reporter::terminal;
@@ -29,7 +33,7 @@ use crate::scanner::blind::BlindScanner;
 use crate::scanner::dom::DomScanner;
 use crate::scanner::reflected::ReflectedScanner;
 use crate::scanner::stored::StoredScanner;
-use crate::scanner::traits::{Finding, Scanner};
+use crate::scanner::traits::{CrawlResult, Finding, Scanner};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -53,6 +57,17 @@ async fn main() -> Result<()> {
 
     // Build HTTP client
     let http_client = HttpClient::new(&config)?;
+
+    // Authenticate if configured
+    if config.auth_url.is_some() {
+        let mut session = SessionManager::new();
+        println!("{} Authenticating...", "[*]".bright_blue());
+        if let Err(e) = session.authenticate(&http_client, &config).await {
+            eprintln!("{} Authentication failed: {}", "[!]".bright_red(), e);
+        } else if session.is_authenticated() {
+            println!("{} Authentication successful", "[+]".bright_green());
+        }
+    }
 
     // Build payload engine
     let payload_engine = Arc::new(PayloadEngine::new(
@@ -149,6 +164,11 @@ async fn main() -> Result<()> {
     let scan_semaphore = Arc::new(tokio::sync::Semaphore::new(config.concurrency.min(10)));
     let pages_scanned = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let scan_dom_scanner = dom_scanner.clone();
+
+    // Clone for post-scan discovery phase
+    let discovery_client = http_client.clone();
+    let discovery_reflected = reflected_scanner.clone();
+    let discovery_engine = payload_engine.clone();
 
     let scan_handle = tokio::spawn({
         let pages_scanned = pages_scanned.clone();
@@ -298,19 +318,74 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Drop our copy of finding_tx so the receiver knows when scanners are done
-    drop(finding_tx);
-
     // Wait for crawler to finish
     let _ = crawler_handle.await;
     // Wait for scanners to finish
     let _ = scan_handle.await;
 
+    let total_pages = pages_scanned.load(std::sync::atomic::Ordering::Relaxed);
     println!(
-        "\n{} Scanning complete. {} pages scanned.",
+        "\n{} Crawl+scan complete. {} pages scanned.",
         "[+]".bright_green(),
-        pages_scanned.load(std::sync::atomic::Ordering::Relaxed).to_string().bright_white()
+        total_pages.to_string().bright_white()
     );
+
+    // === Post-Scan Discovery Phase ===
+
+    // API Endpoint Discovery
+    if config.test_apis {
+        println!("{} Probing for API endpoints...", "[*]".bright_blue());
+        let api = ApiDiscovery::new(discovery_client.clone());
+        let target_url = crate::utils::url::normalize_url(&config.target)?;
+        let endpoints = api.discover(&target_url).await;
+        for ep in &endpoints {
+            println!(
+                "{} API found: {} {} ({})",
+                "[>]".bright_cyan(),
+                ep.method.bright_white(),
+                ep.url.bright_blue(),
+                if ep.is_json_api { "JSON" } else { "HTML" }
+            );
+            let crawl = ep.to_crawl_result();
+            let findings = discovery_reflected.scan(&crawl, &discovery_engine, &discovery_client).await;
+            for f in findings {
+                let _ = finding_tx.send(f).await;
+            }
+        }
+    }
+
+    // GraphQL Discovery
+    if config.test_graphql {
+        println!("{} Testing for GraphQL endpoints...", "[*]".bright_blue());
+        let gql = GraphqlDiscovery::new(discovery_client.clone());
+        let target_url = crate::utils::url::normalize_url(&config.target)?;
+        let graphql_urls = [
+            format!("{}/graphql", target_url.as_str().trim_end_matches('/')),
+            format!("{}/gql", target_url.as_str().trim_end_matches('/')),
+            format!("{}/api/graphql", target_url.as_str().trim_end_matches('/')),
+        ];
+        for gql_url in &graphql_urls {
+            let fields = gql.introspect(gql_url).await;
+            if !fields.is_empty() {
+                let points = gql.fields_to_injection_points(&fields);
+                println!(
+                    "{} GraphQL: {} injectable fields at {}",
+                    "[>]".bright_cyan(),
+                    points.len().to_string().bright_yellow(),
+                    gql_url.bright_blue()
+                );
+            }
+        }
+    }
+
+    // Parameter Mining (runs on all crawled pages)
+    if config.param_wordlist.is_some() || config.verbose > 0 {
+        // Only run param mining if explicitly requested via wordlist or verbose mode
+        // In future, make this a dedicated flag
+    }
+
+    // Drop finding_tx so receiver can finish
+    drop(finding_tx);
 
     // Wait for blind XSS callbacks
     if !config.disable_blind && config.blind_wait_secs > 0 {

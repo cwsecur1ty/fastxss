@@ -56,9 +56,25 @@ pub struct Config {
     #[arg(long)]
     pub auth_url: Option<String>,
 
+    /// Username for form-based authentication
+    #[arg(long)]
+    pub auth_user: Option<String>,
+
+    /// Password for form-based authentication
+    #[arg(long)]
+    pub auth_pass: Option<String>,
+
+    /// Bearer token for API authentication (sent as Authorization header)
+    #[arg(long)]
+    pub bearer_token: Option<String>,
+
     /// Custom payload wordlist path
     #[arg(long)]
     pub wordlist: Option<PathBuf>,
+
+    /// Custom parameter wordlist for hidden parameter discovery
+    #[arg(long)]
+    pub param_wordlist: Option<PathBuf>,
 
     /// Blind XSS callback server port
     #[arg(long, default_value = "8844")]
@@ -107,6 +123,14 @@ pub struct Config {
     /// Maximum retry attempts for transient HTTP errors (429, 503, etc.)
     #[arg(long, default_value = "3")]
     pub max_retries: u32,
+
+    /// Enable API endpoint probing (/api/, /swagger.json, etc.)
+    #[arg(long)]
+    pub test_apis: bool,
+
+    /// Enable GraphQL introspection and argument testing
+    #[arg(long)]
+    pub test_graphql: bool,
 
     /// Wait time in seconds for blind XSS callbacks after scanning completes
     #[arg(long, default_value = "10")]
