@@ -72,12 +72,21 @@ pub enum HtmlContext {
         attr: String,
         quote: char,
     },
+    UnquotedAttributeValue {
+        tag: String,
+        attr: String,
+    },
     TagBody {
         tag: String,
     },
     ScriptBlock,
+    ScriptString {
+        quote: char,
+    },
+    TemplateLiteral,
     StyleBlock,
     Comment,
+    SvgContext,
     Url,
     Plain,
 }

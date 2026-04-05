@@ -2,7 +2,10 @@ use async_trait::async_trait;
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::page::AddScriptToEvaluateOnNewDocumentParams;
 use futures::StreamExt;
-use tracing::{debug, warn};
+use std::path::PathBuf;
+use std::time::Duration;
+use tokio::task::JoinHandle;
+use tracing::{debug, info, warn};
 
 use crate::http::client::HttpClient;
 use crate::payloads::engine::PayloadEngine;
@@ -88,61 +91,209 @@ const SINK_HOOK_SCRIPT: &str = r#"
         return origSetInterval.apply(this, arguments);
     };
 
-    // Hook jQuery .html() if available
+    // Hook jQuery .html() and other jQuery sinks if available
     if (typeof jQuery !== 'undefined') {
-        const origHtml = jQuery.fn.html;
-        jQuery.fn.html = function(val) {
-            if (typeof val === 'string' && val.match(/fxss[a-z0-9]{8}/)) {
-                window.__fxss_findings.push({sink: 'jQuery.html', value: val});
+        ['html', 'append', 'prepend', 'after', 'before', 'replaceWith'].forEach(function(method) {
+            var orig = jQuery.fn[method];
+            if (orig) {
+                jQuery.fn[method] = function(val) {
+                    if (typeof val === 'string' && val.match(/fxss[a-z0-9]{8}/)) {
+                        window.__fxss_findings.push({sink: 'jQuery.' + method, value: val});
+                    }
+                    return orig.apply(this, arguments);
+                };
             }
-            return origHtml.apply(this, arguments);
-        };
+        });
     }
+
+    // Hook insertAdjacentHTML
+    var origInsertAdjacentHTML = Element.prototype.insertAdjacentHTML;
+    Element.prototype.insertAdjacentHTML = function(position, text) {
+        if (typeof text === 'string' && text.match(/fxss[a-z0-9]{8}/)) {
+            window.__fxss_findings.push({sink: 'insertAdjacentHTML', value: text, element: this.tagName});
+        }
+        return origInsertAdjacentHTML.call(this, position, text);
+    };
+
+    // Hook Element.append / prepend (when called with strings)
+    ['append', 'prepend'].forEach(function(method) {
+        var orig = Element.prototype[method];
+        if (orig) {
+            Element.prototype[method] = function() {
+                for (var i = 0; i < arguments.length; i++) {
+                    if (typeof arguments[i] === 'string' && arguments[i].match(/fxss[a-z0-9]{8}/)) {
+                        window.__fxss_findings.push({sink: 'Element.' + method, value: arguments[i]});
+                    }
+                }
+                return orig.apply(this, arguments);
+            };
+        }
+    });
+
+    // Hook location.assign / location.replace
+    ['assign', 'replace'].forEach(function(method) {
+        var orig = location[method];
+        if (orig) {
+            location[method] = function(url) {
+                if (typeof url === 'string' && url.match(/fxss[a-z0-9]{8}/)) {
+                    window.__fxss_findings.push({sink: 'location.' + method, value: url});
+                }
+                return orig.call(location, url);
+            };
+        }
+    });
+
+    // Hook window.open
+    var origWindowOpen = window.open;
+    window.open = function(url) {
+        if (typeof url === 'string' && url.match(/fxss[a-z0-9]{8}/)) {
+            window.__fxss_findings.push({sink: 'window.open', value: url});
+        }
+        return origWindowOpen.apply(this, arguments);
+    };
+
+    // Hook setAttribute for dangerous attributes (src, href, on*)
+    var origSetAttribute = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function(name, value) {
+        if (typeof value === 'string' && value.match(/fxss[a-z0-9]{8}/)) {
+            var dangerous = ['src', 'href', 'action', 'formaction', 'data', 'srcdoc'];
+            if (dangerous.indexOf(name.toLowerCase()) !== -1 || name.toLowerCase().startsWith('on')) {
+                window.__fxss_findings.push({sink: 'setAttribute(' + name + ')', value: value, element: this.tagName});
+            }
+        }
+        return origSetAttribute.call(this, name, value);
+    };
 })();
 "#;
 
 pub struct DomScanner {
     browser: Option<Browser>,
+    handler_handle: Option<JoinHandle<()>>,
+    user_data_dir: Option<PathBuf>,
 }
 
 impl DomScanner {
     pub async fn new() -> Self {
-        let browser = match launch_browser().await {
-            Ok(b) => Some(b),
+        match launch_browser().await {
+            Ok((browser, handler_handle, user_data_dir)) => Self {
+                browser: Some(browser),
+                handler_handle: Some(handler_handle),
+                user_data_dir: Some(user_data_dir),
+            },
             Err(e) => {
                 warn!("Failed to launch headless browser: {}. DOM scanning disabled.", e);
-                None
+                Self {
+                    browser: None,
+                    handler_handle: None,
+                    user_data_dir: None,
+                }
             }
-        };
-        Self { browser }
+        }
     }
 
     pub fn is_available(&self) -> bool {
         self.browser.is_some()
     }
 
-    /// Render a page with JS and extract the full HTML (including JS-rendered forms)
+    /// Gracefully shut down the browser, clean up handler task and temp directory.
+    pub async fn shutdown(&mut self) {
+        // Drop the browser to trigger Chrome close
+        if let Some(browser) = self.browser.take() {
+            drop(browser);
+            info!("Browser closed");
+        }
+
+        // Abort the handler task
+        if let Some(handle) = self.handler_handle.take() {
+            handle.abort();
+        }
+
+        // Clean up temp user data directory
+        if let Some(ref dir) = self.user_data_dir {
+            if dir.exists() {
+                match tokio::fs::remove_dir_all(dir).await {
+                    Ok(_) => debug!("Cleaned up temp dir: {}", dir.display()),
+                    Err(e) => debug!("Failed to clean temp dir {}: {}", dir.display(), e),
+                }
+            }
+        }
+        self.user_data_dir = None;
+    }
+
+    /// Render a page with JS and extract the full HTML (including JS-rendered forms).
+    /// Times out after 5 seconds to prevent hangs.
     pub async fn render_page(&self, url: &str) -> Option<String> {
         let browser = self.browser.as_ref()?;
-        let page = browser.new_page(url).await.ok()?;
 
-        // Wait for page to render (1s is usually enough for most SPAs)
-        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let page = browser.new_page(url).await.ok()?;
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+            let html = page
+                .evaluate("document.documentElement.outerHTML")
+                .await
+                .ok()?
+                .into_value::<String>()
+                .ok()?;
+            let _ = page.close().await;
+            Some(html)
+        })
+        .await
+        .unwrap_or(None)
+    }
 
-        // Extract the full rendered HTML
-        let html = page
-            .evaluate("document.documentElement.outerHTML")
-            .await
-            .ok()?
-            .into_value::<String>()
-            .ok()?;
+    /// Verify that a payload URL actually triggers JavaScript execution.
+    /// Returns true if alert/confirm/prompt was called.
+    pub async fn verify_execution(&self, url: &str) -> bool {
+        let browser = match &self.browser {
+            Some(b) => b,
+            None => return false,
+        };
 
-        let _ = page.close().await;
-        Some(html)
+        let result = tokio::time::timeout(Duration::from_secs(8), async {
+            let page = match browser.new_page("about:blank").await {
+                Ok(p) => p,
+                Err(_) => return false,
+            };
+
+            // Override alert/confirm/prompt to set a flag
+            let hook = AddScriptToEvaluateOnNewDocumentParams::new(
+                r#"
+                window.__fxss_executed = false;
+                window.alert = function() { window.__fxss_executed = true; };
+                window.confirm = function() { window.__fxss_executed = true; return true; };
+                window.prompt = function() { window.__fxss_executed = true; return ''; };
+                "#.to_string()
+            );
+            if page.execute(hook).await.is_err() {
+                let _ = page.close().await;
+                return false;
+            }
+
+            if page.goto(url).await.is_err() {
+                let _ = page.close().await;
+                return false;
+            }
+
+            tokio::time::sleep(Duration::from_millis(2000)).await;
+
+            let executed = page
+                .evaluate("window.__fxss_executed === true")
+                .await
+                .ok()
+                .and_then(|v| v.into_value::<bool>().ok())
+                .unwrap_or(false);
+
+            let _ = page.close().await;
+            executed
+        })
+        .await
+        .unwrap_or(false);
+
+        result
     }
 }
 
-async fn launch_browser() -> anyhow::Result<Browser> {
+async fn launch_browser() -> anyhow::Result<(Browser, JoinHandle<()>, PathBuf)> {
     // Create a unique user data dir to avoid conflicts with running Chrome instances
     let user_data_dir = std::env::temp_dir()
         .join(format!("fastxss-chrome-{}", std::process::id()));
@@ -172,7 +323,7 @@ async fn launch_browser() -> anyhow::Result<Browser> {
         ];
         for path in &chrome_paths {
             if std::path::Path::new(path).exists() {
-                tracing::info!("Using browser: {}", path);
+                info!("Using browser: {}", path);
                 builder = builder.chrome_executable(path);
                 break;
             }
@@ -185,14 +336,14 @@ async fn launch_browser() -> anyhow::Result<Browser> {
 
     let (browser, mut handler) = Browser::launch(config).await?;
 
-    // Spawn handler in background
-    tokio::spawn(async move {
+    // Spawn handler in background — keep the handle for cleanup
+    let handler_handle = tokio::spawn(async move {
         while let Some(event) = handler.next().await {
             let _ = event;
         }
     });
 
-    Ok(browser)
+    Ok((browser, handler_handle, user_data_dir))
 }
 
 #[async_trait]
@@ -253,72 +404,79 @@ impl DomScanner {
         payload: &str,
         source: &str,
     ) -> Option<Finding> {
-        let page = match browser.new_page("about:blank").await {
-            Ok(p) => p,
-            Err(_) => return None,
-        };
+        // Wrap entire operation in a 10-second timeout
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let page = match browser.new_page("about:blank").await {
+                Ok(p) => p,
+                Err(_) => return None,
+            };
 
-        // Inject sink monitoring script before page loads
-        let script_params = AddScriptToEvaluateOnNewDocumentParams::new(SINK_HOOK_SCRIPT.to_string());
-        if page.execute(script_params).await.is_err() {
-            return None;
-        }
+            // Inject sink monitoring script before page loads
+            let script_params = AddScriptToEvaluateOnNewDocumentParams::new(SINK_HOOK_SCRIPT.to_string());
+            if page.execute(script_params).await.is_err() {
+                let _ = page.close().await;
+                return None;
+            }
 
-        // Navigate to the test URL
-        if page.goto(url).await.is_err() {
-            return None;
-        }
+            // Navigate to the test URL
+            if page.goto(url).await.is_err() {
+                let _ = page.close().await;
+                return None;
+            }
 
-        // Wait for page to settle
-        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            // Wait for page to settle
+            tokio::time::sleep(Duration::from_millis(1500)).await;
 
-        // Check for findings
-        let result = page
-            .evaluate("JSON.stringify(window.__fxss_findings || [])")
-            .await;
+            // Check for findings
+            let result = page
+                .evaluate("JSON.stringify(window.__fxss_findings || [])")
+                .await;
 
-        let _ = page.close().await;
+            let _ = page.close().await;
 
-        match result {
-            Ok(val) => {
-                let json_str = val.into_value::<String>().unwrap_or_default();
-                if let Ok(dom_findings) = serde_json::from_str::<Vec<DomFinding>>(&json_str) {
-                    for df in dom_findings {
-                        if df.value.contains(canary) {
-                            debug!(
-                                "DOM XSS found: {} -> {} on {}",
-                                source, df.sink, target.url
-                            );
+            match result {
+                Ok(val) => {
+                    let json_str = val.into_value::<String>().unwrap_or_default();
+                    if let Ok(dom_findings) = serde_json::from_str::<Vec<DomFinding>>(&json_str) {
+                        for df in dom_findings {
+                            if df.value.contains(canary) {
+                                debug!(
+                                    "DOM XSS found: {} -> {} on {}",
+                                    source, df.sink, target.url
+                                );
 
-                            return Some(Finding::new(
-                                ScannerType::Dom,
-                                Severity::High,
-                                Confidence::Confirmed,
-                                url.to_string(),
-                                InjectionPoint {
-                                    name: source.to_string(),
-                                    location: ParamLocation::Fragment,
-                                    original_value: None,
-                                    context: None,
-                                },
-                                payload.to_string(),
-                                format!("Source: {}, Sink: {}, Value: {}", source, df.sink, truncate(&df.value, 200)),
-                                RequestRecord {
-                                    method: "GET".to_string(),
-                                    url: url.to_string(),
-                                    headers: Vec::new(),
-                                    body: None,
-                                },
-                                target.response_status,
-                                Some(HtmlContext::ScriptBlock),
-                            ));
+                                return Some(Finding::new(
+                                    ScannerType::Dom,
+                                    Severity::High,
+                                    Confidence::Confirmed,
+                                    url.to_string(),
+                                    InjectionPoint {
+                                        name: source.to_string(),
+                                        location: ParamLocation::Fragment,
+                                        original_value: None,
+                                        context: None,
+                                    },
+                                    payload.to_string(),
+                                    format!("Source: {}, Sink: {}, Value: {}", source, df.sink, truncate(&df.value, 200)),
+                                    RequestRecord {
+                                        method: "GET".to_string(),
+                                        url: url.to_string(),
+                                        headers: Vec::new(),
+                                        body: None,
+                                    },
+                                    target.response_status,
+                                    Some(HtmlContext::ScriptBlock),
+                                ));
+                            }
                         }
                     }
+                    None
                 }
-                None
+                Err(_) => None,
             }
-            Err(_) => None,
-        }
+        })
+        .await
+        .unwrap_or(None)
     }
 }
 

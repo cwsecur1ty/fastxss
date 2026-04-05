@@ -1,18 +1,60 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing::{debug, info};
 
 use crate::http::client::HttpClient;
 use crate::payloads::engine::{GeneratedPayload, PayloadEngine};
 use crate::scanner::context::{detect_context, is_executable_context};
+use crate::scanner::dom::DomScanner;
 use crate::scanner::traits::*;
 use crate::utils::url::set_query_param;
 
-pub struct ReflectedScanner;
+pub struct ReflectedScanner {
+    dom_verifier: Option<Arc<Mutex<DomScanner>>>,
+}
 
 impl ReflectedScanner {
     pub fn new() -> Self {
-        Self
+        Self { dom_verifier: None }
+    }
+
+    pub fn with_dom_verifier(dom: Arc<Mutex<DomScanner>>) -> Self {
+        Self {
+            dom_verifier: Some(dom),
+        }
+    }
+}
+
+/// Security-relevant response headers
+struct ResponseMeta {
+    has_csp: bool,
+    csp_blocks_inline: bool,
+    has_xss_protection: bool,
+}
+
+fn extract_response_meta(headers: &reqwest::header::HeaderMap) -> ResponseMeta {
+    let csp = headers
+        .get("content-security-policy")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let has_csp = !csp.is_empty();
+    let csp_blocks_inline = has_csp
+        && !csp.contains("unsafe-inline")
+        && (csp.contains("script-src") || csp.contains("default-src"));
+
+    let xss_prot = headers
+        .get("x-xss-protection")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let has_xss_protection = xss_prot.starts_with('1');
+
+    ResponseMeta {
+        has_csp,
+        csp_blocks_inline,
+        has_xss_protection,
     }
 }
 
@@ -106,6 +148,7 @@ impl ReflectedScanner {
             };
 
             let resp_status = resp.status().as_u16();
+            let resp_meta = extract_response_meta(resp.headers());
             let resp_body = match resp.text().await {
                 Ok(b) => b,
                 Err(_) => continue,
@@ -113,7 +156,22 @@ impl ReflectedScanner {
 
             if let Some(pos) = resp_body.find(&gp.canary) {
                 let resp_context = detect_context(&resp_body, pos);
-                let (severity, confidence) = assess_reflected_severity(&resp_body, gp, &resp_context);
+                let (mut severity, mut confidence) =
+                    assess_reflected_severity(&resp_body, gp, &resp_context, Some(&resp_meta));
+
+                // Browser-based execution verification for high-severity findings
+                if severity >= Severity::Medium {
+                    if let Some(ref dom) = self.dom_verifier {
+                        let guard = dom.lock().await;
+                        if guard.is_available() {
+                            if guard.verify_execution(test_url.as_str()).await {
+                                severity = Severity::High;
+                                confidence = Confidence::Confirmed;
+                                info!("Execution CONFIRMED for {} param '{}'", target.url, point.name);
+                            }
+                        }
+                    }
+                }
 
                 debug!(
                     "Reflected XSS: {} param '{}' [{}]",
@@ -140,12 +198,11 @@ impl ReflectedScanner {
                     Some(resp_context),
                 ));
 
-                // Found one confirmed payload, stop testing this param
                 break;
             }
         }
 
-        // If no targeted payloads worked but reflection exists, report as info
+        // If no targeted payloads worked but reflection exists, report as low
         if findings.is_empty() {
             findings.push(Finding::new(
                 ScannerType::Reflected,
@@ -277,7 +334,7 @@ impl ReflectedScanner {
 
             if let Some(pos) = resp_body.find(&gp.canary) {
                 let resp_context = detect_context(&resp_body, pos);
-                let (severity, confidence) = assess_reflected_severity(&resp_body, gp, &resp_context);
+                let (severity, confidence) = assess_reflected_severity(&resp_body, gp, &resp_context, None);
                 let evidence = extract_evidence(&resp_body, pos, 100);
 
                 findings.push(Finding::new(
@@ -359,7 +416,7 @@ impl ReflectedScanner {
 
             if let Some(pos) = resp_body.find(&gp.canary) {
                 let resp_context = detect_context(&resp_body, pos);
-                let (severity, confidence) = assess_reflected_severity(&resp_body, gp, &resp_context);
+                let (severity, confidence) = assess_reflected_severity(&resp_body, gp, &resp_context, None);
                 let evidence = extract_evidence(&resp_body, pos, 100);
 
                 findings.push(Finding::new(
@@ -392,29 +449,33 @@ fn assess_reflected_severity(
     body: &str,
     payload: &GeneratedPayload,
     context: &HtmlContext,
+    meta: Option<&ResponseMeta>,
 ) -> (Severity, Confidence) {
     let full_payload_reflected = body.contains(&payload.raw_payload);
 
-    match context {
-        HtmlContext::ScriptBlock => {
+    let (mut severity, mut confidence) = match context {
+        HtmlContext::ScriptBlock | HtmlContext::ScriptString { .. } | HtmlContext::TemplateLiteral => {
             if full_payload_reflected {
                 (Severity::High, Confidence::High)
             } else {
                 (Severity::Medium, Confidence::Medium)
             }
         }
-        HtmlContext::AttributeValue { attr, .. } if attr.starts_with("on") => {
+        HtmlContext::AttributeValue { attr, .. } | HtmlContext::UnquotedAttributeValue { attr, .. }
+            if attr.starts_with("on") =>
+        {
             if full_payload_reflected {
                 (Severity::High, Confidence::High)
             } else {
                 (Severity::Medium, Confidence::Medium)
             }
         }
-        HtmlContext::AttributeValue { attr, .. }
+        HtmlContext::AttributeValue { attr, .. } | HtmlContext::UnquotedAttributeValue { attr, .. }
             if attr == "href" || attr == "src" || attr == "action" =>
         {
             (Severity::Medium, Confidence::Medium)
         }
+        HtmlContext::SvgContext => (Severity::High, Confidence::High),
         HtmlContext::Plain => {
             if full_payload_reflected {
                 (Severity::Medium, Confidence::Medium)
@@ -430,7 +491,17 @@ fn assess_reflected_severity(
                 (Severity::Low, Confidence::Low)
             }
         }
+    };
+
+    // Downgrade if CSP blocks inline scripts
+    if let Some(meta) = meta {
+        if meta.csp_blocks_inline && severity == Severity::High {
+            severity = Severity::Medium;
+            confidence = Confidence::Medium;
+        }
     }
+
+    (severity, confidence)
 }
 
 fn extract_evidence(body: &str, pos: usize, window: usize) -> String {
@@ -442,10 +513,14 @@ fn extract_evidence(body: &str, pos: usize, window: usize) -> String {
 fn context_name(ctx: &HtmlContext) -> &'static str {
     match ctx {
         HtmlContext::AttributeValue { .. } => "attribute",
+        HtmlContext::UnquotedAttributeValue { .. } => "unquoted_attr",
         HtmlContext::TagBody { .. } => "tag_body",
         HtmlContext::ScriptBlock => "script",
+        HtmlContext::ScriptString { .. } => "script_string",
+        HtmlContext::TemplateLiteral => "template_literal",
         HtmlContext::StyleBlock => "style",
         HtmlContext::Comment => "comment",
+        HtmlContext::SvgContext => "svg",
         HtmlContext::Url => "url",
         HtmlContext::Plain => "plain",
     }

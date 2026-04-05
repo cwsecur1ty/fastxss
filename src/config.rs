@@ -104,6 +104,10 @@ pub struct Config {
     #[arg(long)]
     pub insecure: bool,
 
+    /// Maximum retry attempts for transient HTTP errors (429, 503, etc.)
+    #[arg(long, default_value = "3")]
+    pub max_retries: u32,
+
     /// Wait time in seconds for blind XSS callbacks after scanning completes
     #[arg(long, default_value = "10")]
     pub blind_wait_secs: u64,

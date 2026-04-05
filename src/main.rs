@@ -13,7 +13,7 @@ use anyhow::Result;
 use clap::Parser;
 use colored::*;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -63,16 +63,22 @@ async fn main() -> Result<()> {
     let (finding_tx, mut finding_rx) = mpsc::channel::<Finding>(1000);
 
     // Initialize scanners
-    let reflected_scanner = Arc::new(ReflectedScanner::new());
     let stored_scanner = Arc::new(StoredScanner::new());
 
-    // DOM scanner (optional)
-    let dom_scanner: Option<Arc<DomScanner>> = if !config.disable_dom {
+    // DOM scanner (optional) — wrapped in Mutex for shutdown access
+    let dom_scanner: Option<Arc<Mutex<DomScanner>>> = if !config.disable_dom {
         println!("{} Initializing headless browser for DOM analysis...", "[*]".bright_blue());
-        Some(Arc::new(DomScanner::new().await))
+        Some(Arc::new(Mutex::new(DomScanner::new().await)))
     } else {
         None
     };
+
+    // Reflected scanner — optionally wired to DOM verifier
+    let reflected_scanner = Arc::new(if let Some(ref dom) = dom_scanner {
+        ReflectedScanner::with_dom_verifier(dom.clone())
+    } else {
+        ReflectedScanner::new()
+    });
 
     // Blind scanner + callback server (optional)
     let mut callback_server_handle = None;
@@ -110,6 +116,20 @@ async fn main() -> Result<()> {
         None
     };
 
+    // Ctrl+C signal handler for graceful shutdown
+    let shutdown_dom = dom_scanner.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            eprintln!("\n{} Ctrl+C received, shutting down...", "[!]".bright_red());
+            if let Some(dom) = shutdown_dom {
+                dom.lock().await.shutdown().await;
+            }
+            // Give a moment for cleanup
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            std::process::exit(130);
+        }
+    });
+
     // Crawl channel
     let (crawl_tx, mut crawl_rx) = mpsc::channel(500);
 
@@ -128,9 +148,11 @@ async fn main() -> Result<()> {
     let scan_finding_tx = finding_tx.clone();
     let scan_semaphore = Arc::new(tokio::sync::Semaphore::new(config.concurrency.min(10)));
     let pages_scanned = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let scan_dom_scanner = dom_scanner.clone();
 
     let scan_handle = tokio::spawn({
         let pages_scanned = pages_scanned.clone();
+        let dom_scanner = scan_dom_scanner;
         async move {
             let mut page_handles = Vec::new();
 
@@ -162,9 +184,10 @@ async fn main() -> Result<()> {
 
                     if should_render {
                         if let Some(ref dom) = dom {
-                            if dom.is_available() {
+                            let dom_guard = dom.lock().await;
+                            if dom_guard.is_available() {
                                 if let Some(rendered_html) =
-                                    dom.render_page(crawl_result.url.as_str()).await
+                                    dom_guard.render_page(crawl_result.url.as_str()).await
                                 {
                                     let js_forms = crate::crawler::forms::extract_forms(
                                         &rendered_html,
@@ -241,7 +264,8 @@ async fn main() -> Result<()> {
                         let client = client.clone();
                         let tx = tx.clone();
                         scan_handles.push(tokio::spawn(async move {
-                            let findings = scanner.scan(&target, &engine, &client).await;
+                            let guard = scanner.lock().await;
+                            let findings = guard.scan(&target, &engine, &client).await;
                             for f in findings {
                                 let _ = tx.send(f).await;
                             }
@@ -341,6 +365,11 @@ async fn main() -> Result<()> {
                 // Already printed to terminal
             }
         }
+    }
+
+    // Clean up browser
+    if let Some(ref dom) = dom_scanner {
+        dom.lock().await.shutdown().await;
     }
 
     info!("Scan complete. Found {} potential XSS vulnerabilities.", collection.count());
