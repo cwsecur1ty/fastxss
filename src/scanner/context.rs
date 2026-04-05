@@ -119,21 +119,25 @@ fn detect_attribute_context(tag_content: &str, tag_name: &str) -> Option<HtmlCon
     }
 
     // Check for unquoted attribute: <input value=CANARY
+    // The canary position is right at the boundary, so tag_content may end with "="
+    // or have a short unquoted value after it
     let trimmed = tag_content.trim_end();
     if let Some(eq_pos) = trimmed.rfind('=') {
         let after_eq = trimmed[eq_pos + 1..].trim_start();
-        if !after_eq.is_empty()
-            && !after_eq.starts_with('"')
-            && !after_eq.starts_with('\'')
-            && !after_eq.contains(char::is_whitespace)
-        {
+        // Either empty (canary is right after =) or has content with no quotes
+        let is_unquoted = after_eq.is_empty()
+            || (!after_eq.starts_with('"')
+                && !after_eq.starts_with('\'')
+                && !after_eq.contains(char::is_whitespace));
+
+        if is_unquoted {
             let before_eq = trimmed[..eq_pos].trim_end();
             let attr = before_eq
                 .rsplit(|c: char| c.is_whitespace())
                 .next()
                 .unwrap_or("")
                 .to_lowercase();
-            if !attr.is_empty() {
+            if !attr.is_empty() && attr.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
                 return Some(HtmlContext::UnquotedAttributeValue {
                     tag: tag_name.to_string(),
                     attr,
