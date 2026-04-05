@@ -167,4 +167,4 @@ This tool is intended for authorized security testing only. Always obtain writte
 
 ## License
 
-MIT
+[LICENSE](LICENSE)
