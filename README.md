@@ -26,7 +26,7 @@ Detects reflected, stored, DOM-based, and blind/out-of-band cross-site scripting
 ### Build from source
 
 ```bash
-git clone https://github.com/youruser/fastxss.git
+git clone https://github.com/cwsecur1ty/fastxss.git
 cd fastxss
 cargo build --release
 ```
