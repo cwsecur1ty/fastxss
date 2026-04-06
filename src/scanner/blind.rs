@@ -53,7 +53,7 @@ impl Scanner for BlindScanner {
 
         // Inject blind payloads into all form fields
         for form in &target.forms {
-            for gp in payloads.iter().take(5) {
+            for gp in payloads.iter().take(15) {
                 let mut form_data = HashMap::new();
 
                 for field in &form.fields {
@@ -115,7 +115,7 @@ impl Scanner for BlindScanner {
         // Inject via query parameters
         for point in &target.params {
             if point.location == ParamLocation::Query {
-                for gp in payloads.iter().take(3) {
+                for gp in payloads.iter().take(10) {
                     let test_url =
                         crate::utils::url::set_query_param(&target.url, &point.name, &gp.payload);
 
@@ -134,7 +134,7 @@ impl Scanner for BlindScanner {
         }
 
         // Inject via headers
-        for gp in payloads.iter().take(3) {
+        for gp in payloads.iter().take(10) {
             let headers = vec![
                 ("User-Agent".to_string(), gp.payload.clone()),
                 ("Referer".to_string(), gp.payload.clone()),

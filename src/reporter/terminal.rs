@@ -1,4 +1,7 @@
 use colored::*;
+use indicatif::{ProgressBar, ProgressStyle};
+use std::sync::Arc;
+use std::time::Instant;
 
 use crate::reporter::finding::FindingCollection;
 use crate::scanner::traits::{Finding, Severity};
@@ -7,12 +10,12 @@ pub fn print_banner() {
     println!(
         "{}",
         r#"
-    dMMMMMP .aMMMb  .dMMMb dMMMMMMP dMP dMP .dMMMb  .dMMMb 
-   dMP     dMP"dMP dMP" VP   dMP   dMK.dMP dMP" VP dMP" VP 
-  dMMMP   dMMMMMP  VMMMb    dMP   .dMMMK"  VMMMb   VMMMb   
- dMP     dMP dMP dP .dMP   dMP   dMP"AMF dP .dMP dP .dMP   
-dMP     dMP dMP  VMMMP"   dMP   dMP dMP  VMMMP"  VMMMP"    
-                                                           
+    dMMMMMP .aMMMb  .dMMMb dMMMMMMP dMP dMP .dMMMb  .dMMMb
+   dMP     dMP"dMP dMP" VP   dMP   dMK.dMP dMP" VP dMP" VP
+  dMMMP   dMMMMMP  VMMMb    dMP   .dMMMK"  VMMMb   VMMMb
+ dMP     dMP dMP dP .dMP   dMP   dMP"AMF dP .dMP dP .dMP
+dMP     dMP dMP  VMMMP"   dMP   dMP dMP  VMMMP"  VMMMP"
+
     "#
         .bright_red()
     );
@@ -28,14 +31,18 @@ pub fn print_scan_start(target: &str) {
     );
 }
 
-pub fn print_crawl_status(pages_found: usize) {
-    print!(
-        "\r{} Scanning... {} pages processed",
-        "[*]".bright_blue(),
-        pages_found.to_string().bright_yellow()
+pub fn create_progress_bar() -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.cyan} {msg} [{elapsed_precise}] {pos} pages scanned"
+        )
+        .unwrap()
+        .tick_chars("|/-\\"),
     );
-    use std::io::Write;
-    let _ = std::io::stdout().flush();
+    pb.set_message("Scanning...");
+    pb.enable_steady_tick(std::time::Duration::from_millis(200));
+    pb
 }
 
 pub fn print_scan_page(url: &str, params: usize, forms: usize) {
@@ -88,12 +95,22 @@ pub fn print_finding(finding: &Finding) {
     );
 }
 
-pub fn print_summary(collection: &FindingCollection) {
+pub fn print_summary(collection: &FindingCollection, duration: std::time::Duration) {
     let counts = collection.count_by_severity();
+    let secs = duration.as_secs();
+    let duration_str = if secs >= 60 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
+    };
 
     println!();
     println!("{}", "=".repeat(60).bright_white());
-    println!("{}", " Scan Summary".bright_white().bold());
+    println!(
+        " {} {}",
+        "Scan Summary".bright_white().bold(),
+        format!("({})", duration_str).bright_white()
+    );
     println!("{}", "=".repeat(60).bright_white());
     println!(
         "  Total findings: {}",

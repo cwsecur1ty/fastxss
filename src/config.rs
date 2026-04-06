@@ -42,6 +42,10 @@ pub struct Config {
     #[arg(long, value_delimiter = ',')]
     pub scope: Vec<String>,
 
+    /// Exclude URL paths matching these patterns (comma-separated, e.g. "/logout,/static")
+    #[arg(long, value_delimiter = ',')]
+    pub exclude: Vec<String>,
+
     /// Requests per second limit [default: 100]
     #[arg(long, default_value = "100")]
     pub rate_limit: u32,

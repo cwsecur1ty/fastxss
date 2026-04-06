@@ -43,6 +43,18 @@ pub fn is_in_scope(url: &Url, target: &Url, extra_scope: &[String]) -> bool {
     false
 }
 
+pub fn is_excluded(url: &Url, exclude_patterns: &[String]) -> bool {
+    let path = url.path().to_lowercase();
+    let full = url.as_str().to_lowercase();
+    for pattern in exclude_patterns {
+        let p = pattern.to_lowercase();
+        if path.contains(&p) || full.contains(&p) {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn is_same_origin(a: &Url, b: &Url) -> bool {
     a.scheme() == b.scheme() && a.host_str() == b.host_str() && a.port() == b.port()
 }

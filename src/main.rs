@@ -55,6 +55,7 @@ async fn main() -> Result<()> {
     terminal::print_banner();
     terminal::print_scan_start(&config.target);
 
+    let scan_start = std::time::Instant::now();
     let config = Arc::new(config);
 
     // Build HTTP client
@@ -186,6 +187,7 @@ async fn main() -> Result<()> {
     let scan_semaphore = Arc::new(tokio::sync::Semaphore::new(config.concurrency.min(10)));
     let pages_scanned = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let scan_dom_scanner = dom_scanner.clone();
+    let progress = Arc::new(terminal::create_progress_bar());
 
     // Clone for post-scan discovery phase
     let discovery_client = http_client.clone();
@@ -195,6 +197,7 @@ async fn main() -> Result<()> {
     let scan_handle = tokio::spawn({
         let pages_scanned = pages_scanned.clone();
         let dom_scanner = scan_dom_scanner;
+        let progress = progress.clone();
         async move {
             let mut page_handles = Vec::new();
 
@@ -207,6 +210,7 @@ async fn main() -> Result<()> {
                 let engine = payload_engine.clone();
                 let client = http_client.clone();
                 let tx = scan_finding_tx.clone();
+                let pb = progress.clone();
                 let config = scan_config.clone();
                 let pages = pages_scanned.clone();
 
@@ -330,6 +334,7 @@ async fn main() -> Result<()> {
                     }
 
                     pages.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    pb.inc(1);
                 }));
             }
 
@@ -346,8 +351,9 @@ async fn main() -> Result<()> {
     let _ = scan_handle.await;
 
     let total_pages = pages_scanned.load(std::sync::atomic::Ordering::Relaxed);
+    progress.finish_and_clear();
     println!(
-        "\n{} Crawl+scan complete. {} pages scanned.",
+        "{} Crawl+scan complete. {} pages scanned.",
         "[+]".bright_green(),
         total_pages.to_string().bright_white()
     );
@@ -396,6 +402,40 @@ async fn main() -> Result<()> {
                     points.len().to_string().bright_yellow(),
                     gql_url.bright_blue()
                 );
+            }
+        }
+    }
+
+    // Parameter Mining
+    {
+        println!("{} Mining for hidden parameters...", "[*]".bright_blue());
+        let target_url = crate::utils::url::normalize_url(&config.target)?;
+        let miner = ParamMiner::new(
+            discovery_client.clone(),
+            config.concurrency,
+            config.param_wordlist.as_deref(),
+        );
+        let mined_params = miner.mine(&target_url).await;
+        if !mined_params.is_empty() {
+            println!(
+                "{} Found {} hidden parameters",
+                "[+]".bright_green(),
+                mined_params.len().to_string().bright_yellow()
+            );
+            // Create a synthetic crawl result with discovered params and scan it
+            let mut params = mined_params;
+            params.extend(crate::crawler::params::extract_header_injection_points());
+            let crawl = crate::scanner::traits::CrawlResult {
+                url: target_url.clone(),
+                method: "GET".to_string(),
+                params,
+                response_body: String::new(),
+                response_status: 200,
+                forms: Vec::new(),
+            };
+            let findings = discovery_reflected.scan(&crawl, &discovery_engine, &discovery_client).await;
+            for f in findings {
+                let _ = finding_tx.send(f).await;
             }
         }
     }
@@ -459,7 +499,7 @@ async fn main() -> Result<()> {
     let collection = collection_handle.await?;
 
     // Print summary
-    terminal::print_summary(&collection);
+    terminal::print_summary(&collection, scan_start.elapsed());
 
     // Write output
     if let Some(ref output_path) = config.output_file {

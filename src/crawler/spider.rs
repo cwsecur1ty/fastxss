@@ -14,7 +14,7 @@ use crate::crawler::params;
 use crate::crawler::sitemap;
 use crate::http::client::HttpClient;
 use crate::scanner::traits::CrawlResult;
-use crate::utils::url::{is_in_scope, is_static_resource, normalize_url};
+use crate::utils::url::{is_excluded, is_in_scope, is_static_resource, normalize_url};
 
 pub struct Spider {
     config: Arc<Config>,
@@ -91,6 +91,10 @@ impl Spider {
                 if !is_in_scope(&url, &target, &config.scope) {
                     continue;
                 }
+                if is_excluded(&url, &config.exclude) {
+                    debug!("Skipping excluded path: {}", url.path());
+                    continue;
+                }
                 if config.respect_robots
                     && !sitemap::is_path_allowed(url.path(), &disallowed)
                 {
@@ -110,6 +114,7 @@ impl Spider {
                 let qtx = feeder_qtx.clone();
                 let target = target.clone();
                 let scope = config.scope.clone();
+                let exclude = config.exclude.clone();
                 let max_depth = config.crawl_depth;
                 let visited = visited.clone();
                 let active = active.clone();
@@ -136,6 +141,7 @@ impl Spider {
                                 if !visited.contains(&ds)
                                     && is_in_scope(&discovered, &target, &scope)
                                     && !is_static_resource(&discovered)
+                                    && !is_excluded(&discovered, &exclude)
                                     && depth + 1 <= max_depth
                                 {
                                     let _ = qtx.send((discovered, depth + 1)).await;
