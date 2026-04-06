@@ -147,6 +147,10 @@ pub struct Finding {
     pub response_status: u16,
     pub context: Option<HtmlContext>,
     pub timestamp: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waf_detected: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csp_info: Option<String>,
 }
 
 impl Finding {
@@ -175,6 +179,8 @@ impl Finding {
             response_status,
             context,
             timestamp: Utc::now(),
+            waf_detected: None,
+            csp_info: None,
         }
     }
 }

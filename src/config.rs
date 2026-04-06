@@ -104,6 +104,18 @@ pub struct Config {
     #[arg(long, help_heading = "Scanners")]
     pub test_graphql: bool,
 
+    /// Test for CRLF injection in headers
+    #[arg(long, help_heading = "Scanners")]
+    pub test_crlf: bool,
+
+    /// Detect and fingerprint WAF before scanning
+    #[arg(long, help_heading = "Scanners")]
+    pub waf_detect: bool,
+
+    /// Use encoding chains for WAF bypass attempts
+    #[arg(long, help_heading = "Scanners")]
+    pub encoding_chains: bool,
+
     // ── Output ──────────────────────────────────────────────
     /// Output format: json, html, terminal [default: terminal]
     #[arg(long, default_value = "terminal", help_heading = "Output")]

@@ -152,6 +152,67 @@ impl PayloadEngine {
         }
     }
 
+    /// WAF bypass payloads — exotic event handlers, parser abuse, obfuscation
+    pub fn waf_bypass_payloads(&self) -> Vec<GeneratedPayload> {
+        self.store
+            .all_waf_bypass()
+            .into_iter()
+            .map(|p| {
+                let canary = Self::generate_canary();
+                let payload = p.replace("{{CANARY}}", &canary);
+                GeneratedPayload {
+                    canary,
+                    payload: payload.clone(),
+                    raw_payload: payload,
+                    encoding: EncodingType::None,
+                }
+            })
+            .collect()
+    }
+
+    /// Mutation XSS payloads — parser differential, DOMPurify bypass, namespace confusion
+    pub fn mxss_payloads(&self) -> Vec<GeneratedPayload> {
+        self.store
+            .all_mxss()
+            .into_iter()
+            .map(|p| {
+                let canary = Self::generate_canary();
+                let payload = p.replace("{{CANARY}}", &canary);
+                GeneratedPayload {
+                    canary,
+                    payload: payload.clone(),
+                    raw_payload: payload,
+                    encoding: EncodingType::None,
+                }
+            })
+            .collect()
+    }
+
+    /// Payloads with encoding chains applied — for WAF bypass attempts
+    pub fn chain_encoded_payloads(&self, context: Option<&HtmlContext>) -> Vec<GeneratedPayload> {
+        let base = self.select_payloads_for_context(context, &self.store.all_reflected());
+        let chains = encoder::evasion_chains();
+        let mut result = Vec::new();
+
+        // Take top 10 payloads, apply each chain
+        for payload in base.iter().take(10) {
+            let canary = Self::generate_canary();
+            let with_canary = payload.replace("{{CANARY}}", &canary);
+
+            for chain in &chains {
+                let encoded = chain.apply(&with_canary);
+                result.push(GeneratedPayload {
+                    canary: canary.clone(),
+                    payload: encoded,
+                    raw_payload: with_canary.clone(),
+                    encoding: EncodingType::None,
+                });
+            }
+        }
+
+        result
+    }
+
     fn expand_with_encodings(&self, base_payloads: &[&str]) -> Vec<GeneratedPayload> {
         let encodings = encoder::all_encodings();
         let mut result = Vec::new();

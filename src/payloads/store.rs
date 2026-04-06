@@ -5,6 +5,8 @@ const STORED_PAYLOADS: &str = include_str!("../../payloads/stored.txt");
 const DOM_PAYLOADS: &str = include_str!("../../payloads/dom.txt");
 const BLIND_PAYLOADS: &str = include_str!("../../payloads/blind.txt");
 const POLYGLOT_PAYLOADS: &str = include_str!("../../payloads/polyglot.txt");
+const WAF_BYPASS_PAYLOADS: &str = include_str!("../../payloads/waf_bypass.txt");
+const MXSS_PAYLOADS: &str = include_str!("../../payloads/mxss.txt");
 
 pub struct PayloadStore {
     pub reflected: Vec<String>,
@@ -12,6 +14,8 @@ pub struct PayloadStore {
     pub dom: Vec<String>,
     pub blind: Vec<String>,
     pub polyglot: Vec<String>,
+    pub waf_bypass: Vec<String>,
+    pub mxss: Vec<String>,
     pub custom: Vec<String>,
 }
 
@@ -23,6 +27,8 @@ impl PayloadStore {
             dom: parse_payload_file(DOM_PAYLOADS),
             blind: parse_payload_file(BLIND_PAYLOADS),
             polyglot: parse_payload_file(POLYGLOT_PAYLOADS),
+            waf_bypass: parse_payload_file(WAF_BYPASS_PAYLOADS),
+            mxss: parse_payload_file(MXSS_PAYLOADS),
             custom: Vec::new(),
         };
 
@@ -59,6 +65,14 @@ impl PayloadStore {
         let mut payloads: Vec<&str> = self.blind.iter().map(|s| s.as_str()).collect();
         payloads.extend(self.custom.iter().map(|s| s.as_str()));
         payloads
+    }
+
+    pub fn all_waf_bypass(&self) -> Vec<&str> {
+        self.waf_bypass.iter().map(|s| s.as_str()).collect()
+    }
+
+    pub fn all_mxss(&self) -> Vec<&str> {
+        self.mxss.iter().map(|s| s.as_str()).collect()
     }
 }
 

@@ -30,10 +30,12 @@ use crate::payloads::engine::PayloadEngine;
 use crate::reporter::finding::FindingCollection;
 use crate::reporter::terminal;
 use crate::scanner::blind::BlindScanner;
+use crate::scanner::crlf::CrlfScanner;
 use crate::scanner::dom::DomScanner;
 use crate::scanner::reflected::ReflectedScanner;
 use crate::scanner::stored::StoredScanner;
 use crate::scanner::traits::{CrawlResult, Finding, Scanner};
+use crate::scanner::waf::WafDetector;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -68,6 +70,26 @@ async fn main() -> Result<()> {
             println!("{} Authentication successful", "[+]".bright_green());
         }
     }
+
+    // WAF detection
+    let waf_result = if config.waf_detect {
+        println!("{} Detecting WAF...", "[*]".bright_blue());
+        let detector = WafDetector::new(http_client.clone());
+        let target_url = crate::utils::url::normalize_url(&config.target)?;
+        let result = detector.detect(&target_url).await;
+        if result.detected {
+            println!(
+                "{} WAF detected: {}",
+                "[!]".bright_yellow(),
+                result.summary().bright_yellow()
+            );
+        } else {
+            println!("{} No WAF detected", "[+]".bright_green());
+        }
+        Some(result)
+    } else {
+        None
+    };
 
     // Build payload engine
     let payload_engine = Arc::new(PayloadEngine::new(
@@ -378,10 +400,32 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Parameter Mining (runs on all crawled pages)
-    if config.param_wordlist.is_some() || config.verbose > 0 {
-        // Only run param mining if explicitly requested via wordlist or verbose mode
-        // In future, make this a dedicated flag
+    // CRLF Injection Testing
+    if config.test_crlf {
+        println!("{} Testing for CRLF injection...", "[*]".bright_blue());
+        // Run CRLF scanner on discovered crawl results would require storing them
+        // For now, test against the target URL directly
+        let target_url = crate::utils::url::normalize_url(&config.target)?;
+        let crlf = CrlfScanner::new();
+        let probe_result = crate::scanner::traits::CrawlResult {
+            url: target_url.clone(),
+            method: "GET".to_string(),
+            params: crate::crawler::params::extract_url_params(&target_url),
+            response_body: String::new(),
+            response_status: 200,
+            forms: Vec::new(),
+        };
+        let crlf_findings = crlf.scan(&probe_result, &discovery_engine, &discovery_client).await;
+        for f in crlf_findings {
+            println!(
+                "{} {} CRLF: {} ({})",
+                "[!]".bright_red(),
+                f.severity.to_string().bright_red(),
+                f.evidence.bright_white(),
+                f.url.bright_blue()
+            );
+            let _ = finding_tx.send(f).await;
+        }
     }
 
     // Drop finding_tx so receiver can finish

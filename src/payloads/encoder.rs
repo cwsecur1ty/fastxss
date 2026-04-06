@@ -83,9 +83,45 @@ pub enum EncodingType {
     DoubleUrlEncode,
     HtmlEntity,
     HtmlNumeric,
+    HtmlHexEntity,
     JsUnicode,
+    CssEscape,
+    UnicodeFullwidth,
     MixedCase,
     NullByte,
+}
+
+/// CSS escape encoding (\3c for <)
+pub fn css_escape(input: &str) -> String {
+    input
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_string()
+            } else {
+                format!("\\{:x} ", c as u32)
+            }
+        })
+        .collect()
+}
+
+/// Unicode fullwidth character substitution
+pub fn unicode_fullwidth(input: &str) -> String {
+    input
+        .chars()
+        .map(|c| {
+            if c.is_ascii() && (c as u32) >= 0x21 && (c as u32) <= 0x7E {
+                char::from_u32(c as u32 + 0xFEE0).unwrap_or(c)
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// HTML hex entity encoding (&#x3c; for <)
+pub fn html_hex_entity_encode(input: &str) -> String {
+    input.chars().map(|c| format!("&#x{:x};", c as u32)).collect()
 }
 
 pub fn apply_encoding(input: &str, encoding: EncodingType) -> String {
@@ -95,7 +131,10 @@ pub fn apply_encoding(input: &str, encoding: EncodingType) -> String {
         EncodingType::DoubleUrlEncode => double_url_encode(input),
         EncodingType::HtmlEntity => html_entity_encode(input),
         EncodingType::HtmlNumeric => html_numeric_encode(input),
+        EncodingType::HtmlHexEntity => html_hex_entity_encode(input),
         EncodingType::JsUnicode => js_unicode_escape(input),
+        EncodingType::CssEscape => css_escape(input),
+        EncodingType::UnicodeFullwidth => unicode_fullwidth(input),
         EncodingType::MixedCase => mixed_case(input),
         EncodingType::NullByte => null_byte_inject(input),
     }
@@ -108,6 +147,63 @@ pub fn all_encodings() -> Vec<EncodingType> {
         EncodingType::DoubleUrlEncode,
         EncodingType::HtmlEntity,
         EncodingType::MixedCase,
+    ]
+}
+
+// === Encoding Chains ===
+
+/// A chain of encodings applied in sequence (left to right)
+#[derive(Debug, Clone)]
+pub struct EncodingChain {
+    pub steps: Vec<EncodingType>,
+    pub name: String,
+}
+
+impl EncodingChain {
+    pub fn apply(&self, input: &str) -> String {
+        let mut result = input.to_string();
+        for step in &self.steps {
+            result = apply_encoding(&result, *step);
+        }
+        result
+    }
+}
+
+/// Predefined encoding chains for WAF bypass
+pub fn evasion_chains() -> Vec<EncodingChain> {
+    vec![
+        EncodingChain {
+            steps: vec![EncodingType::HtmlEntity, EncodingType::UrlEncode],
+            name: "HTML→URL".to_string(),
+        },
+        EncodingChain {
+            steps: vec![EncodingType::UrlEncode, EncodingType::HtmlEntity],
+            name: "URL→HTML".to_string(),
+        },
+        EncodingChain {
+            steps: vec![EncodingType::MixedCase, EncodingType::UrlEncode],
+            name: "MixedCase→URL".to_string(),
+        },
+        EncodingChain {
+            steps: vec![EncodingType::HtmlHexEntity],
+            name: "HexEntity".to_string(),
+        },
+        EncodingChain {
+            steps: vec![EncodingType::HtmlNumeric],
+            name: "NumericEntity".to_string(),
+        },
+        EncodingChain {
+            steps: vec![EncodingType::JsUnicode],
+            name: "JSUnicode".to_string(),
+        },
+        EncodingChain {
+            steps: vec![EncodingType::UnicodeFullwidth],
+            name: "Fullwidth".to_string(),
+        },
+        EncodingChain {
+            steps: vec![EncodingType::NullByte, EncodingType::UrlEncode],
+            name: "NullByte→URL".to_string(),
+        },
     ]
 }
 

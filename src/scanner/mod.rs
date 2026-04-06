@@ -4,3 +4,6 @@ pub mod reflected;
 pub mod stored;
 pub mod dom;
 pub mod blind;
+pub mod waf;
+pub mod csp;
+pub mod crlf;
