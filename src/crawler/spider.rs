@@ -200,10 +200,14 @@ async fn crawl_page(client: &HttpClient, url: &Url) -> Result<(CrawlResult, Vec<
     let mut injection_points = forms::forms_to_injection_points(&page_forms);
 
     // Extract URL parameters
-    injection_points.extend(params::extract_url_params(url));
+    let url_params = params::extract_url_params(url);
+    let has_real_params = !url_params.is_empty() || !page_forms.is_empty();
+    injection_points.extend(url_params);
 
-    // Extract header injection points
-    injection_points.extend(params::extract_header_injection_points());
+    // Only test header injection on pages that process input (saves ~7 probes per static page)
+    if has_real_params {
+        injection_points.extend(params::extract_header_injection_points());
+    }
 
     // Extract links for further crawling
     let discovered = extract_links(&body, url);

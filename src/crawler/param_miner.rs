@@ -83,45 +83,60 @@ impl ParamMiner {
 
     /// Mine hidden parameters on a page by comparing response sizes
     pub async fn mine(&self, base_url: &Url) -> Vec<InjectionPoint> {
-        let mut discovered = Vec::new();
-
-        // Get baseline response length
-        let baseline_len = match self.get_response_length(base_url.as_str()).await {
-            Some(len) => len,
-            None => return discovered,
+        // Get baseline response + extract JS params in one fetch
+        let resp = match self.client.get(base_url.as_str()).await {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
         };
+        let body = match resp.text().await {
+            Ok(b) => b,
+            Err(_) => return Vec::new(),
+        };
+        let baseline_len = body.len();
 
-        // Combine built-in + custom param lists
-        let mut all_params: Vec<&str> = BUILTIN_PARAMS.to_vec();
-        for p in &self.custom_params {
-            all_params.push(p.as_str());
+        // Extract params from JS source
+        let js_params = extract_params_from_js(&body);
+
+        // Combine all candidate params, dedup
+        let mut seen = std::collections::HashSet::new();
+        let mut all_params: Vec<String> = Vec::new();
+
+        // JS-extracted params first (highest signal)
+        for p in &js_params {
+            if seen.insert(p.clone()) {
+                all_params.push(p.clone());
+            }
         }
-
-        // Also extract params from JavaScript on the page
-        if let Ok(resp) = self.client.get(base_url.as_str()).await {
-            if let Ok(body) = resp.text().await {
-                let js_params = extract_params_from_js(&body);
-                // Can't extend all_params with owned strings easily, so we'll test them separately
-                for param in &js_params {
-                    if let Some(point) = self.test_param(base_url, param, baseline_len).await {
-                        discovered.push(point);
-                    }
-                }
+        // Then builtin list
+        for p in BUILTIN_PARAMS {
+            let s = p.to_string();
+            if seen.insert(s.clone()) {
+                all_params.push(s);
+            }
+        }
+        // Custom wordlist
+        for p in &self.custom_params {
+            if seen.insert(p.clone()) {
+                all_params.push(p.clone());
             }
         }
 
-        // Test each candidate parameter
+        // Skip params already in the URL
+        let existing: std::collections::HashSet<String> = base_url
+            .query_pairs()
+            .map(|(k, _)| k.to_string())
+            .collect();
+
+        // Test all candidates concurrently
         let mut handles = Vec::new();
         for param in all_params {
-            // Skip params already in the URL
-            if base_url.query_pairs().any(|(k, _)| k == param) {
+            if existing.contains(&param) {
                 continue;
             }
 
             let permit = self.semaphore.clone().acquire_owned().await.unwrap();
             let client = self.client.clone();
             let url = base_url.clone();
-            let param = param.to_string();
             let baseline = baseline_len;
 
             handles.push(tokio::spawn(async move {
@@ -130,6 +145,7 @@ impl ParamMiner {
             }));
         }
 
+        let mut discovered = Vec::new();
         for handle in handles {
             if let Ok(Some(point)) = handle.await {
                 discovered.push(point);

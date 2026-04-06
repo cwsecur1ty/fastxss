@@ -225,9 +225,9 @@ impl DomScanner {
     pub async fn render_page(&self, url: &str) -> Option<String> {
         let browser = self.browser.as_ref()?;
 
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(4), async {
             let page = browser.new_page(url).await.ok()?;
-            tokio::time::sleep(Duration::from_millis(1000)).await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
             let html = page
                 .evaluate("document.documentElement.outerHTML")
                 .await

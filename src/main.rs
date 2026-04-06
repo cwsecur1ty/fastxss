@@ -358,113 +358,132 @@ async fn main() -> Result<()> {
         total_pages.to_string().bright_white()
     );
 
-    // === Post-Scan Discovery Phase ===
+    // === Post-Scan Discovery Phase (parallel) ===
+    let target_url = crate::utils::url::normalize_url(&config.target)?;
+    println!("{} Running post-scan discovery...", "[*]".bright_blue());
 
-    // API Endpoint Discovery
-    if config.test_apis {
-        println!("{} Probing for API endpoints...", "[*]".bright_blue());
-        let api = ApiDiscovery::new(discovery_client.clone());
-        let target_url = crate::utils::url::normalize_url(&config.target)?;
-        let endpoints = api.discover(&target_url).await;
-        for ep in &endpoints {
-            println!(
-                "{} API found: {} {} ({})",
-                "[>]".bright_cyan(),
-                ep.method.bright_white(),
-                ep.url.bright_blue(),
-                if ep.is_json_api { "JSON" } else { "HTML" }
-            );
-            let crawl = ep.to_crawl_result();
-            let findings = discovery_reflected.scan(&crawl, &discovery_engine, &discovery_client).await;
-            for f in findings {
-                let _ = finding_tx.send(f).await;
-            }
-        }
-    }
+    let mut discovery_handles: Vec<tokio::task::JoinHandle<Vec<Finding>>> = Vec::new();
 
-    // GraphQL Discovery
-    if config.test_graphql {
-        println!("{} Testing for GraphQL endpoints...", "[*]".bright_blue());
-        let gql = GraphqlDiscovery::new(discovery_client.clone());
-        let target_url = crate::utils::url::normalize_url(&config.target)?;
-        let graphql_urls = [
-            format!("{}/graphql", target_url.as_str().trim_end_matches('/')),
-            format!("{}/gql", target_url.as_str().trim_end_matches('/')),
-            format!("{}/api/graphql", target_url.as_str().trim_end_matches('/')),
-        ];
-        for gql_url in &graphql_urls {
-            let fields = gql.introspect(gql_url).await;
-            if !fields.is_empty() {
-                let points = gql.fields_to_injection_points(&fields);
-                println!(
-                    "{} GraphQL: {} injectable fields at {}",
-                    "[>]".bright_cyan(),
-                    points.len().to_string().bright_yellow(),
-                    gql_url.bright_blue()
-                );
-            }
-        }
-    }
-
-    // Parameter Mining
+    // Parameter Mining (always runs)
     {
-        println!("{} Mining for hidden parameters...", "[*]".bright_blue());
-        let target_url = crate::utils::url::normalize_url(&config.target)?;
-        let miner = ParamMiner::new(
-            discovery_client.clone(),
-            config.concurrency,
-            config.param_wordlist.as_deref(),
-        );
-        let mined_params = miner.mine(&target_url).await;
-        if !mined_params.is_empty() {
+        let client = discovery_client.clone();
+        let reflected = discovery_reflected.clone();
+        let engine = discovery_engine.clone();
+        let url = target_url.clone();
+        let concurrency = config.concurrency;
+        let wordlist = config.param_wordlist.clone();
+
+        discovery_handles.push(tokio::spawn(async move {
+            let miner = ParamMiner::new(client.clone(), concurrency, wordlist.as_deref());
+            let mined = miner.mine(&url).await;
+            if mined.is_empty() {
+                return Vec::new();
+            }
             println!(
                 "{} Found {} hidden parameters",
                 "[+]".bright_green(),
-                mined_params.len().to_string().bright_yellow()
+                mined.len().to_string().bright_yellow()
             );
-            // Create a synthetic crawl result with discovered params and scan it
-            let mut params = mined_params;
-            params.extend(crate::crawler::params::extract_header_injection_points());
             let crawl = crate::scanner::traits::CrawlResult {
-                url: target_url.clone(),
+                url: url.clone(),
                 method: "GET".to_string(),
-                params,
+                params: mined,
                 response_body: String::new(),
                 response_status: 200,
                 forms: Vec::new(),
             };
-            let findings = discovery_reflected.scan(&crawl, &discovery_engine, &discovery_client).await;
+            reflected.scan(&crawl, &engine, &client).await
+        }));
+    }
+
+    // API Discovery
+    if config.test_apis {
+        let client = discovery_client.clone();
+        let reflected = discovery_reflected.clone();
+        let engine = discovery_engine.clone();
+        let url = target_url.clone();
+
+        discovery_handles.push(tokio::spawn(async move {
+            let api = ApiDiscovery::new(client.clone());
+            let endpoints = api.discover(&url).await;
+            let mut all_findings = Vec::new();
+            for ep in &endpoints {
+                println!(
+                    "{} API: {} {} ({})",
+                    "[>]".bright_cyan(),
+                    ep.method.bright_white(),
+                    ep.url.bright_blue(),
+                    if ep.is_json_api { "JSON" } else { "HTML" }
+                );
+                let crawl = ep.to_crawl_result();
+                all_findings.extend(reflected.scan(&crawl, &engine, &client).await);
+            }
+            all_findings
+        }));
+    }
+
+    // GraphQL Discovery
+    if config.test_graphql {
+        let client = discovery_client.clone();
+        let url = target_url.clone();
+
+        discovery_handles.push(tokio::spawn(async move {
+            let gql = GraphqlDiscovery::new(client);
+            let graphql_urls = [
+                format!("{}/graphql", url.as_str().trim_end_matches('/')),
+                format!("{}/gql", url.as_str().trim_end_matches('/')),
+                format!("{}/api/graphql", url.as_str().trim_end_matches('/')),
+            ];
+            for gql_url in &graphql_urls {
+                let fields = gql.introspect(gql_url).await;
+                if !fields.is_empty() {
+                    println!(
+                        "{} GraphQL: {} injectable fields at {}",
+                        "[>]".bright_cyan(),
+                        fields.len().to_string().bright_yellow(),
+                        gql_url.bright_blue()
+                    );
+                }
+            }
+            Vec::new()
+        }));
+    }
+
+    // CRLF Testing
+    if config.test_crlf {
+        let client = discovery_client.clone();
+        let engine = discovery_engine.clone();
+        let url = target_url.clone();
+
+        discovery_handles.push(tokio::spawn(async move {
+            let crlf = CrlfScanner::new();
+            let probe = crate::scanner::traits::CrawlResult {
+                url: url.clone(),
+                method: "GET".to_string(),
+                params: crate::crawler::params::extract_url_params(&url),
+                response_body: String::new(),
+                response_status: 200,
+                forms: Vec::new(),
+            };
+            let findings = crlf.scan(&probe, &engine, &client).await;
+            for f in &findings {
+                println!(
+                    "{} {} CRLF: {}",
+                    "[!]".bright_red(),
+                    f.severity.to_string().bright_red(),
+                    f.evidence.bright_white()
+                );
+            }
+            findings
+        }));
+    }
+
+    // Collect all discovery findings
+    for handle in discovery_handles {
+        if let Ok(findings) = handle.await {
             for f in findings {
                 let _ = finding_tx.send(f).await;
             }
-        }
-    }
-
-    // CRLF Injection Testing
-    if config.test_crlf {
-        println!("{} Testing for CRLF injection...", "[*]".bright_blue());
-        // Run CRLF scanner on discovered crawl results would require storing them
-        // For now, test against the target URL directly
-        let target_url = crate::utils::url::normalize_url(&config.target)?;
-        let crlf = CrlfScanner::new();
-        let probe_result = crate::scanner::traits::CrawlResult {
-            url: target_url.clone(),
-            method: "GET".to_string(),
-            params: crate::crawler::params::extract_url_params(&target_url),
-            response_body: String::new(),
-            response_status: 200,
-            forms: Vec::new(),
-        };
-        let crlf_findings = crlf.scan(&probe_result, &discovery_engine, &discovery_client).await;
-        for f in crlf_findings {
-            println!(
-                "{} {} CRLF: {} ({})",
-                "[!]".bright_red(),
-                f.severity.to_string().bright_red(),
-                f.evidence.bright_white(),
-                f.url.bright_blue()
-            );
-            let _ = finding_tx.send(f).await;
         }
     }
 
