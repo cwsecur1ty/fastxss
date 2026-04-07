@@ -21,13 +21,34 @@ pub enum OutputFormat {
   fastxss -t https://example.com --output-format html -o report.html
   fastxss -t https://example.com --cookie \"session=abc123\"
   fastxss -t https://example.com --auth-url https://example.com/login --auth-user admin --auth-pass secret
-  fastxss -t https://example.com --proxy http://127.0.0.1:8080 --insecure"
+  fastxss -t https://example.com --proxy http://127.0.0.1:8080 --insecure
+
+  \x1b[1mIntegration (subprocess mode):\x1b[0m
+  fastxss -t https://example.com --urls-file urls.txt --no-crawl --output-format json -o results.json --quiet
+  fastxss -t https://example.com --urls-file urls.txt --forms-file forms.json --no-crawl --output-format json --quiet"
 )]
 pub struct Config {
     // ── Target ──────────────────────────────────────────────
     /// Target URL to scan
     #[arg(short, long)]
     pub target: String,
+
+    // ── Integration Mode ────────────────────────────────────
+    /// File of URLs to scan (one per line), skips crawling those URLs
+    #[arg(long, help_heading = "Integration")]
+    pub urls_file: Option<PathBuf>,
+
+    /// File of forms as JSON array (from external crawler)
+    #[arg(long, help_heading = "Integration")]
+    pub forms_file: Option<PathBuf>,
+
+    /// Disable built-in crawler (use with --urls-file)
+    #[arg(long, help_heading = "Integration")]
+    pub no_crawl: bool,
+
+    /// Suppress banner and color output (for subprocess/CI use)
+    #[arg(long, help_heading = "Integration")]
+    pub quiet: bool,
 
     // ── Scan Scope ──────────────────────────────────────────
     /// Max concurrent requests [default: 50]
@@ -37,6 +58,10 @@ pub struct Config {
     /// Max crawl depth [default: 10]
     #[arg(long, default_value = "10")]
     pub crawl_depth: usize,
+
+    /// Max pages to crawl (0 = unlimited) [default: 0]
+    #[arg(long, default_value = "0")]
+    pub max_pages: usize,
 
     /// Allowed domains (comma-separated)
     #[arg(long, value_delimiter = ',')]
@@ -128,6 +153,10 @@ pub struct Config {
     /// Write report to file
     #[arg(short, long, help_heading = "Output")]
     pub output_file: Option<PathBuf>,
+
+    /// Stream findings as JSON lines to file in real-time
+    #[arg(long, help_heading = "Output")]
+    pub json_stream: Option<PathBuf>,
 
     /// Verbosity (-v info, -vv debug, -vvv trace)
     #[arg(short, long, action = clap::ArgAction::Count, help_heading = "Output")]

@@ -104,8 +104,21 @@ impl Scanner for StoredScanner {
             }
         }
 
-        // Phase 2: Revisit the page to check for stored payloads
-        if let Ok(resp) = http_client.get(target.url.as_str()).await {
+        // Phase 2: Revisit the page with cache-busting to check for stored payloads
+        // Add cache-busting param + headers to avoid CDN/browser cached responses
+        let revisit_url = {
+            let mut u = target.url.clone();
+            u.query_pairs_mut().append_pair("_fxss_nocache", &format!("{}", std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()));
+            u
+        };
+        let cache_headers = vec![
+            ("Cache-Control".to_string(), "no-cache, no-store".to_string()),
+            ("Pragma".to_string(), "no-cache".to_string()),
+        ];
+        if let Ok(resp) = http_client.request("GET", revisit_url.as_str(), Some(&cache_headers), None).await {
             if let Ok(body) = resp.text().await {
                 for entry in self.injected_canaries.iter() {
                     let canary = entry.key();

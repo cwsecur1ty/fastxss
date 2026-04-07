@@ -99,7 +99,7 @@ pub struct InjectionPoint {
     pub context: Option<HtmlContext>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct FormData {
     pub action: String,
     pub method: String,
@@ -107,7 +107,7 @@ pub struct FormData {
     pub enctype: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct FormField {
     pub name: String,
     pub field_type: String,

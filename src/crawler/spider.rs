@@ -82,6 +82,9 @@ impl Spider {
                 if visited.contains(&url_str) {
                     continue;
                 }
+                if config.max_pages > 0 && visited.len() >= config.max_pages {
+                    continue;
+                }
                 if depth > config.crawl_depth {
                     continue;
                 }

@@ -38,6 +38,20 @@ const SVG_ELEMENTS: &[&str] = &[
 pub fn detect_context(html: &str, canary_pos: usize) -> HtmlContext {
     let before = &html[..canary_pos];
 
+    // Check non-executable contexts first (noscript, textarea, title, xmp)
+    // Content inside these tags renders as text, not HTML
+    for tag in &["textarea", "noscript", "title", "xmp", "iframe", "noframes"] {
+        let open_tag = format!("<{}", tag);
+        let close_tag = format!("</{}", tag);
+        let last_open = before.rfind(&open_tag);
+        let last_close = before.rfind(&close_tag);
+        if let Some(open) = last_open {
+            if last_close.map_or(true, |close| close < open) {
+                return HtmlContext::Plain; // Content is text, not executable
+            }
+        }
+    }
+
     // Check if inside a script block
     let last_script_open = before.rfind("<script");
     let last_script_close = before.rfind("</script");

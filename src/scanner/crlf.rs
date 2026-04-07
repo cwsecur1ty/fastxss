@@ -59,6 +59,15 @@ impl Scanner for CrlfScanner {
     ) -> Vec<Finding> {
         let mut findings = Vec::new();
 
+        // Get baseline headers to avoid false positives from pre-existing headers
+        let baseline_has_canary_header = if let Ok(resp) = http_client.get(target.url.as_str()).await {
+            resp.headers()
+                .get(CRLF_CANARY_HEADER)
+                .is_some()
+        } else {
+            false
+        };
+
         // Test query parameters for CRLF injection
         for point in &target.params {
             if point.location != ParamLocation::Query {
@@ -77,11 +86,12 @@ impl Scanner for CrlfScanner {
                 let headers = resp.headers().clone();
                 let body = resp.text().await.unwrap_or_default();
 
-                // Check if our injected header appears in the response
-                let header_injected = headers
-                    .get(CRLF_CANARY_HEADER)
-                    .and_then(|v| v.to_str().ok())
-                    .map_or(false, |v| v.contains(CRLF_CANARY_VALUE));
+                // Check if our injected header appears (and wasn't there before)
+                let header_injected = !baseline_has_canary_header
+                    && headers
+                        .get(CRLF_CANARY_HEADER)
+                        .and_then(|v| v.to_str().ok())
+                        .map_or(false, |v| v.contains(CRLF_CANARY_VALUE));
 
                 // Check for response body injection (response splitting)
                 let body_injected = body.contains("<script>alert(1)</script>")

@@ -182,16 +182,27 @@ async fn test_param_static(
 
     let resp = client.get(test_url.as_str()).await.ok()?;
     let body = resp.text().await.ok()?;
+
+    // Primary signal: canary reflects in response (high confidence)
+    if body.contains(canary) {
+        debug!("Hidden param found (reflects): '{}' on {}", param, base_url);
+        return Some(InjectionPoint {
+            name: param.to_string(),
+            location: ParamLocation::Query,
+            original_value: None,
+            context: None,
+        });
+    }
+
+    // Secondary signal: significant response length change
+    // Use higher threshold (200+ bytes) to avoid false positives from
+    // timestamps, CSRF tokens, ads, analytics IDs
     let test_len = body.len();
-
-    // If response length differs significantly OR canary appears in response
     let len_diff = (test_len as isize - baseline_len as isize).unsigned_abs();
-    let reflects = body.contains(canary);
-
-    if reflects || len_diff > 50 {
+    if len_diff > 200 {
         debug!(
-            "Hidden param found: '{}' on {} (len diff: {}, reflects: {})",
-            param, base_url, len_diff, reflects
+            "Hidden param found (len diff {}): '{}' on {}",
+            len_diff, param, base_url
         );
         return Some(InjectionPoint {
             name: param.to_string(),

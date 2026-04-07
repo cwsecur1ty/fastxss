@@ -52,10 +52,13 @@ async fn main() -> Result<()> {
         .with_env_filter(EnvFilter::new(filter))
         .init();
 
-    terminal::print_banner();
-    terminal::print_scan_start(&config.target);
+    if !config.quiet {
+        terminal::print_banner();
+        terminal::print_scan_start(&config.target);
+    }
 
     let scan_start = std::time::Instant::now();
+    let quiet = config.quiet;
     let config = Arc::new(config);
 
     // Build HTTP client
@@ -171,15 +174,96 @@ async fn main() -> Result<()> {
     // Crawl channel
     let (crawl_tx, mut crawl_rx) = mpsc::channel(500);
 
-    // Start crawler
+    // Load external forms if provided
+    let external_forms: Vec<crate::scanner::traits::FormData> = if let Some(ref forms_path) = config.forms_file {
+        match std::fs::read_to_string(forms_path) {
+            Ok(json) => serde_json::from_str(&json).unwrap_or_else(|e| {
+                eprintln!("Failed to parse forms file: {}", e);
+                Vec::new()
+            }),
+            Err(e) => {
+                eprintln!("Failed to read forms file: {}", e);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    // Start crawler or feed from --urls-file
     let crawler_config = config.clone();
     let crawler_client = http_client.clone();
-    let crawler_handle = tokio::spawn(async move {
-        let mut spider = Spider::new(crawler_config, crawler_client);
-        if let Err(e) = spider.crawl(crawl_tx).await {
-            eprintln!("Crawler error: {}", e);
-        }
-    });
+    let crawler_handle = if config.no_crawl {
+        // No-crawl mode: feed URLs from file or just the target
+        let tx = crawl_tx.clone();
+        let client = crawler_client.clone();
+        let external_forms = external_forms.clone();
+        tokio::spawn(async move {
+            let urls: Vec<String> = if let Some(ref urls_path) = crawler_config.urls_file {
+                match std::fs::read_to_string(urls_path) {
+                    Ok(content) => content
+                        .lines()
+                        .map(|l| l.trim().to_string())
+                        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                        .collect(),
+                    Err(e) => {
+                        eprintln!("Failed to read URLs file: {}", e);
+                        vec![crawler_config.target.clone()]
+                    }
+                }
+            } else {
+                vec![crawler_config.target.clone()]
+            };
+
+            for url_str in &urls {
+                let url = match crate::utils::url::normalize_url(url_str) {
+                    Ok(u) => u,
+                    Err(_) => continue,
+                };
+
+                // Fetch each URL to get response body for context detection
+                let resp = match client.get(url.as_str()).await {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                let status = resp.status().as_u16();
+                let body = resp.text().await.unwrap_or_default();
+
+                // Extract forms from HTML + merge external forms for this URL
+                let mut page_forms = crate::crawler::forms::extract_forms(&body, &url);
+                for ext_form in &external_forms {
+                    if ext_form.action == url.as_str() || ext_form.action.starts_with(url.as_str()) {
+                        page_forms.push(ext_form.clone());
+                    }
+                }
+                // If no URL-specific match, add all external forms to first URL
+                if page_forms.is_empty() && !external_forms.is_empty() && url_str == &urls[0] {
+                    page_forms.extend(external_forms.clone());
+                }
+
+                let mut params = crate::crawler::forms::forms_to_injection_points(&page_forms);
+                params.extend(crate::crawler::params::extract_url_params(&url));
+
+                let crawl_result = crate::scanner::traits::CrawlResult {
+                    url,
+                    method: "GET".to_string(),
+                    params,
+                    response_body: body,
+                    response_status: status,
+                    forms: page_forms,
+                };
+                let _ = tx.send(crawl_result).await;
+            }
+        })
+    } else {
+        // Normal crawl mode
+        tokio::spawn(async move {
+            let mut spider = Spider::new(crawler_config, crawler_client);
+            if let Err(e) = spider.crawl(crawl_tx).await {
+                eprintln!("Crawler error: {}", e);
+            }
+        })
+    };
 
     // Process crawl results - scan pages concurrently
     let scan_config = config.clone();
@@ -505,39 +589,66 @@ async fn main() -> Result<()> {
         handle.abort();
     }
 
-    // Collect all findings
+    // Collect all findings (with optional real-time JSON streaming)
+    let json_stream_path = config.json_stream.clone();
     let collection_handle = tokio::spawn(async move {
+        use std::io::Write;
+
+        let mut stream_file = json_stream_path.as_ref().and_then(|path| {
+            std::fs::File::create(path)
+                .map_err(|e| eprintln!("Failed to create JSON stream file: {}", e))
+                .ok()
+        });
+
         let mut collection = FindingCollection::new();
         while let Some(finding) = finding_rx.recv().await {
-            terminal::print_finding(&finding);
+            if !quiet {
+                terminal::print_finding(&finding);
+            }
+
+            // Stream to JSONL file in real-time
+            if let Some(ref mut f) = stream_file {
+                if let Ok(json) = serde_json::to_string(&finding) {
+                    let _ = writeln!(f, "{}", json);
+                    let _ = f.flush();
+                }
+            }
+
             collection.add(finding);
         }
         collection
     });
 
     let collection = collection_handle.await?;
+    let finding_count = collection.count();
 
-    // Print summary
-    terminal::print_summary(&collection, scan_start.elapsed());
+    // Print summary (unless quiet)
+    if !quiet {
+        terminal::print_summary(&collection, scan_start.elapsed());
+    }
 
     // Write output
     if let Some(ref output_path) = config.output_file {
         match config.output_format {
             OutputFormat::Json => {
                 reporter::json::write_json_report(&collection, output_path)?;
-                println!(
-                    "{} JSON report written to {}",
-                    "[+]".bright_green(),
-                    output_path.display().to_string().bright_white()
-                );
+                if !quiet {
+                    println!(
+                        "{} JSON report written to {}",
+                        "[+]".bright_green(),
+                        output_path.display().to_string().bright_white()
+                    );
+                }
             }
             OutputFormat::Html => {
                 reporter::html::write_html_report(&collection, output_path)?;
-                println!(
-                    "{} HTML report written to {}",
-                    "[+]".bright_green(),
-                    output_path.display().to_string().bright_white()
-                );
+                if !quiet {
+                    println!(
+                        "{} HTML report written to {}",
+                        "[+]".bright_green(),
+                        output_path.display().to_string().bright_white()
+                    );
+                }
             }
             OutputFormat::Terminal => {
                 // Already printed to terminal
@@ -545,12 +656,23 @@ async fn main() -> Result<()> {
         }
     }
 
+    // In quiet+json mode with no output file, write JSON to stdout
+    if quiet && config.output_file.is_none() && matches!(config.output_format, OutputFormat::Json) {
+        let json = serde_json::to_string_pretty(collection.as_slice())?;
+        println!("{}", json);
+    }
+
     // Clean up browser
     if let Some(ref dom) = dom_scanner {
         dom.lock().await.shutdown().await;
     }
 
-    info!("Scan complete. Found {} potential XSS vulnerabilities.", collection.count());
+    info!("Scan complete. Found {} potential XSS vulnerabilities.", finding_count);
+
+    // Exit code: 0 = no vulns, 1 = vulns found
+    if finding_count > 0 {
+        std::process::exit(1);
+    }
 
     Ok(())
 }

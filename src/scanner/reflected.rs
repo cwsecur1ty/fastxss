@@ -122,6 +122,11 @@ impl ReflectedScanner {
         };
 
         let status = resp.status().as_u16();
+        let content_type = resp.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_lowercase();
         let body = match resp.text().await {
             Ok(b) => b,
             Err(_) => return Vec::new(),
@@ -131,6 +136,11 @@ impl ReflectedScanner {
             Some(pos) => pos,
             None => return Vec::new(), // Param doesn't reflect - skip entirely
         };
+
+        // JSON responses can't execute scripts — reflection is not exploitable
+        if content_type.contains("application/json") || content_type.contains("text/json") {
+            return Vec::new();
+        }
 
         // Phase 2: Param reflects! Detect context and send targeted payloads
         let context = detect_context(&body, canary_pos);
@@ -549,6 +559,14 @@ fn assess_reflected_severity(
 ) -> (Severity, Confidence) {
     let full_payload_reflected = body.contains(&payload.raw_payload);
 
+    // Check if the payload is HTML-encoded in the response (safe, not executable)
+    let is_html_encoded = is_payload_encoded(body, &payload.raw_payload);
+
+    // If the dangerous chars are encoded, it's not exploitable
+    if is_html_encoded && !full_payload_reflected {
+        return (Severity::Low, Confidence::Low);
+    }
+
     let (mut severity, mut confidence) = match context {
         HtmlContext::ScriptBlock | HtmlContext::ScriptString { .. } | HtmlContext::TemplateLiteral => {
             if full_payload_reflected {
@@ -598,6 +616,30 @@ fn assess_reflected_severity(
     }
 
     (severity, confidence)
+}
+
+/// Check if the payload's dangerous characters are HTML-encoded in the response
+fn is_payload_encoded(body: &str, raw_payload: &str) -> bool {
+    if !raw_payload.contains('<') && !raw_payload.contains('>') {
+        return false;
+    }
+    // Check common encoding patterns
+    let encoded_lt = raw_payload.replace('<', "&lt;");
+    let encoded_gt = encoded_lt.replace('>', "&gt;");
+    if body.contains(&encoded_gt) {
+        return true;
+    }
+    let numeric_lt = raw_payload.replace('<', "&#60;");
+    let numeric_gt = numeric_lt.replace('>', "&#62;");
+    if body.contains(&numeric_gt) {
+        return true;
+    }
+    let hex_lt = raw_payload.replace('<', "&#x3c;");
+    let hex_gt = hex_lt.replace('>', "&#x3e;");
+    if body.contains(&hex_gt) {
+        return true;
+    }
+    false
 }
 
 fn extract_evidence(body: &str, pos: usize, window: usize) -> String {
