@@ -50,32 +50,36 @@ impl Scanner for StoredScanner {
     ) -> Vec<Finding> {
         let mut findings = Vec::new();
 
-        // Phase 1: Inject payloads via forms (POST forms are primary stored XSS vectors)
+        // Phase 1: Inject payloads via forms — rotate across ALL eligible fields
         for form in &target.forms {
             if form.method != "POST" {
                 continue;
             }
 
+            let injectable_fields: Vec<&FormField> = form
+                .fields
+                .iter()
+                .filter(|f| {
+                    matches!(
+                        f.field_type.as_str(),
+                        "text" | "textarea" | "hidden" | "email" | "search" | "url" | "tel"
+                    )
+                })
+                .collect();
+
             let payloads = payload_engine.stored_payloads(None);
 
-            for gp in payloads.iter().take(3) {
-                let mut form_data = HashMap::new();
-                let mut injected_field = None;
+            // Test each injectable field with a payload (rotate fields, not just first)
+            for (i, target_field) in injectable_fields.iter().enumerate() {
+                let gp = match payloads.get(i % payloads.len().max(1)) {
+                    Some(p) => p,
+                    None => continue,
+                };
 
+                let mut form_data = HashMap::new();
                 for field in &form.fields {
-                    if field.field_type == "text"
-                        || field.field_type == "textarea"
-                        || field.field_type == "hidden"
-                    {
-                        if injected_field.is_none() {
-                            form_data.insert(field.name.clone(), gp.payload.clone());
-                            injected_field = Some(field.name.clone());
-                        } else {
-                            form_data.insert(
-                                field.name.clone(),
-                                field.value.clone().unwrap_or_else(|| "test".to_string()),
-                            );
-                        }
+                    if field.name == target_field.name {
+                        form_data.insert(field.name.clone(), gp.payload.clone());
                     } else {
                         form_data.insert(
                             field.name.clone(),
@@ -84,22 +88,20 @@ impl Scanner for StoredScanner {
                     }
                 }
 
-                if let Some(field_name) = injected_field {
-                    if let Ok(_resp) = http_client.post_form(&form.action, &form_data).await {
-                        self.injected_canaries.insert(
-                            gp.canary.clone(),
-                            StoredInjectionRecord {
-                                injection_url: form.action.clone(),
-                                injection_point: InjectionPoint {
-                                    name: field_name,
-                                    location: ParamLocation::Body,
-                                    original_value: None,
-                                    context: None,
-                                },
-                                payload: gp.payload.clone(),
+                if let Ok(_resp) = http_client.post_form(&form.action, &form_data).await {
+                    self.injected_canaries.insert(
+                        gp.canary.clone(),
+                        StoredInjectionRecord {
+                            injection_url: form.action.clone(),
+                            injection_point: InjectionPoint {
+                                name: target_field.name.clone(),
+                                location: ParamLocation::Body,
+                                original_value: None,
+                                context: None,
                             },
-                        );
-                    }
+                            payload: gp.payload.clone(),
+                        },
+                    );
                 }
             }
         }

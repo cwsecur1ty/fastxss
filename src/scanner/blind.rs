@@ -133,13 +133,17 @@ impl Scanner for BlindScanner {
             }
         }
 
-        // Inject via headers
+        // Inject via headers (common logging/reflection targets)
+        let injectable_headers = [
+            "User-Agent", "Referer", "X-Forwarded-For", "X-Forwarded-Host",
+            "X-Original-URL", "X-Rewrite-URL", "Origin", "Accept-Language",
+            "X-Client-IP", "X-Real-IP", "Forwarded", "CF-Connecting-IP",
+        ];
         for gp in payloads.iter().take(10) {
-            let headers = vec![
-                ("User-Agent".to_string(), gp.payload.clone()),
-                ("Referer".to_string(), gp.payload.clone()),
-                ("X-Forwarded-For".to_string(), gp.payload.clone()),
-            ];
+            let headers: Vec<(String, String)> = injectable_headers
+                .iter()
+                .map(|h| (h.to_string(), gp.payload.clone()))
+                .collect();
 
             self.token_map.insert(
                 gp.canary.clone(),

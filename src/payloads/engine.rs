@@ -118,7 +118,7 @@ impl PayloadEngine {
         context: Option<&HtmlContext>,
         all_payloads: &[&'a str],
     ) -> Vec<&'a str> {
-        match context {
+        let mut selected: Vec<&'a str> = match context {
             Some(HtmlContext::AttributeValue { quote, .. }) => {
                 let break_char = match quote {
                     '"' => "\"",
@@ -132,24 +132,64 @@ impl PayloadEngine {
                             || p.contains("onmouseover")
                             || p.contains("onfocus")
                             || p.contains("autofocus")
+                            || p.contains("onclick")
+                            || p.contains("onerror")
+                            || p.contains("onload")
+                            || p.contains("><")  // tag breaking
                     })
                     .copied()
                     .collect()
             }
-            Some(HtmlContext::ScriptBlock) => all_payloads
-                .iter()
-                .filter(|p| {
-                    p.contains("</script>") || p.contains("alert") || p.contains("eval")
-                })
-                .copied()
-                .collect(),
+            Some(HtmlContext::UnquotedAttributeValue { .. }) => {
+                all_payloads
+                    .iter()
+                    .filter(|p| {
+                        p.contains(" on") || p.contains("><") || p.contains("autofocus")
+                            || p.contains("onerror") || p.contains("onload")
+                    })
+                    .copied()
+                    .collect()
+            }
+            Some(HtmlContext::ScriptBlock) | Some(HtmlContext::ScriptString { .. }) => {
+                all_payloads
+                    .iter()
+                    .filter(|p| {
+                        p.contains("</script>")
+                            || p.contains("alert")
+                            || p.contains("eval")
+                            || p.contains("confirm")
+                            || p.contains("prompt")
+                            || p.contains("onerror")
+                            || p.contains(";")       // statement injection
+                            || p.contains("throw")
+                    })
+                    .copied()
+                    .collect()
+            }
+            Some(HtmlContext::TemplateLiteral) => {
+                all_payloads
+                    .iter()
+                    .filter(|p| {
+                        p.contains("${") || p.contains("`") || p.contains("alert")
+                            || p.contains("</script>")
+                    })
+                    .copied()
+                    .collect()
+            }
             Some(HtmlContext::Comment) => all_payloads
                 .iter()
-                .filter(|p| p.contains("-->"))
+                .filter(|p| p.contains("-->") || p.contains("--!>") || p.contains("<"))
                 .copied()
                 .collect(),
             _ => all_payloads.to_vec(),
+        };
+
+        // If filtering was too aggressive (fewer than 5 results), fall back to all payloads
+        if selected.len() < 5 {
+            selected = all_payloads.to_vec();
         }
+
+        selected
     }
 
     /// WAF bypass payloads — exotic event handlers, parser abuse, obfuscation

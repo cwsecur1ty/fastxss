@@ -96,7 +96,6 @@ pub fn extract_forms(html: &str, page_url: &Url) -> Vec<FormData> {
         if field_type == "submit"
             || field_type == "button"
             || field_type == "image"
-            || field_type == "hidden"
             || field_type == "checkbox"
             || field_type == "radio"
             || field_type == "file"
@@ -104,10 +103,10 @@ pub fn extract_forms(html: &str, page_url: &Url) -> Vec<FormData> {
             continue;
         }
 
-        // Only target text-like inputs
+        // Target text-like inputs AND hidden fields (hidden can contain user-controlled values)
         let is_injectable = matches!(
             field_type.as_str(),
-            "text" | "email" | "search" | "url" | "tel" | "password" | "number" | "textarea"
+            "text" | "email" | "search" | "url" | "tel" | "password" | "number" | "textarea" | "hidden"
         ) || input_el.value().name() == "textarea";
 
         if !is_injectable {

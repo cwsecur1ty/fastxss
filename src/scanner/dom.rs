@@ -370,7 +370,7 @@ impl Scanner for DomScanner {
         let mut findings = Vec::new();
         let payloads = payload_engine.dom_payloads();
 
-        for gp in payloads.iter().take(10) {
+        for gp in payloads.iter().take(8) {
             // Test via location.hash
             let hash_url = format!("{}#{}", target.url, gp.payload);
             if let Some(finding) = self.test_url(browser, &hash_url, &gp.canary, target, &gp.payload, "location.hash").await {
@@ -378,7 +378,7 @@ impl Scanner for DomScanner {
                 break;
             }
 
-            // Test via query parameter (if the page reads from it)
+            // Test via query parameter
             let search_url = if target.url.as_str().contains('?') {
                 format!("{}&fxss={}", target.url, gp.payload)
             } else {
@@ -387,6 +387,20 @@ impl Scanner for DomScanner {
             if let Some(finding) = self.test_url(browser, &search_url, &gp.canary, target, &gp.payload, "location.search").await {
                 findings.push(finding);
                 break;
+            }
+        }
+
+        // Test via window.name (persistent across navigations)
+        if let Some(gp) = payloads.first() {
+            if let Some(finding) = self.test_window_name(browser, target, &gp.payload, &gp.canary).await {
+                findings.push(finding);
+            }
+        }
+
+        // Test via postMessage
+        if let Some(gp) = payloads.first() {
+            if let Some(finding) = self.test_postmessage(browser, target, &gp.payload, &gp.canary).await {
+                findings.push(finding);
             }
         }
 
@@ -474,6 +488,139 @@ impl DomScanner {
                 }
                 Err(_) => None,
             }
+        })
+        .await
+        .unwrap_or(None)
+    }
+
+    /// Test DOM XSS via window.name (set name on blank page, then navigate)
+    async fn test_window_name(
+        &self,
+        browser: &Browser,
+        target: &CrawlResult,
+        payload: &str,
+        canary: &str,
+    ) -> Option<Finding> {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let page = browser.new_page("about:blank").await.ok()?;
+
+            let script_params = AddScriptToEvaluateOnNewDocumentParams::new(SINK_HOOK_SCRIPT.to_string());
+            page.execute(script_params).await.ok()?;
+
+            // Set window.name to payload, then navigate to target
+            let set_name = format!("window.name = {};", serde_json::to_string(payload).unwrap_or_default());
+            page.evaluate(set_name).await.ok()?;
+            page.goto(target.url.as_str()).await.ok()?;
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+
+            let result = page
+                .evaluate("JSON.stringify(window.__fxss_findings || [])")
+                .await;
+            let _ = page.close().await;
+
+            if let Ok(val) = result {
+                let json_str = val.into_value::<String>().unwrap_or_default();
+                if let Ok(dom_findings) = serde_json::from_str::<Vec<DomFinding>>(&json_str) {
+                    for df in dom_findings {
+                        if df.value.contains(canary) {
+                            return Some(Finding::new(
+                                ScannerType::Dom,
+                                Severity::High,
+                                Confidence::Confirmed,
+                                target.url.to_string(),
+                                InjectionPoint {
+                                    name: "window.name".to_string(),
+                                    location: ParamLocation::Fragment,
+                                    original_value: None,
+                                    context: None,
+                                },
+                                payload.to_string(),
+                                format!("Source: window.name, Sink: {}", df.sink),
+                                RequestRecord {
+                                    method: "GET".to_string(),
+                                    url: target.url.to_string(),
+                                    headers: Vec::new(),
+                                    body: None,
+                                },
+                                target.response_status,
+                                Some(HtmlContext::ScriptBlock),
+                            ));
+                        }
+                    }
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None)
+    }
+
+    /// Test DOM XSS via postMessage (send message to page and check sinks)
+    async fn test_postmessage(
+        &self,
+        browser: &Browser,
+        target: &CrawlResult,
+        payload: &str,
+        canary: &str,
+    ) -> Option<Finding> {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let page = browser.new_page("about:blank").await.ok()?;
+
+            let script_params = AddScriptToEvaluateOnNewDocumentParams::new(SINK_HOOK_SCRIPT.to_string());
+            page.execute(script_params).await.ok()?;
+
+            page.goto(target.url.as_str()).await.ok()?;
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+
+            // Send postMessage with payload (try string and JSON forms)
+            let msg_payloads = [
+                format!("window.postMessage({}, '*')", serde_json::to_string(payload).unwrap_or_default()),
+                format!("window.postMessage(JSON.stringify({{data: {}}}), '*')", serde_json::to_string(payload).unwrap_or_default()),
+            ];
+
+            for msg in &msg_payloads {
+                page.evaluate(msg.clone()).await.ok()?;
+            }
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+
+            let result = page
+                .evaluate("JSON.stringify(window.__fxss_findings || [])")
+                .await;
+            let _ = page.close().await;
+
+            if let Ok(val) = result {
+                let json_str = val.into_value::<String>().unwrap_or_default();
+                if let Ok(dom_findings) = serde_json::from_str::<Vec<DomFinding>>(&json_str) {
+                    for df in dom_findings {
+                        if df.value.contains(canary) {
+                            return Some(Finding::new(
+                                ScannerType::Dom,
+                                Severity::High,
+                                Confidence::Confirmed,
+                                target.url.to_string(),
+                                InjectionPoint {
+                                    name: "postMessage".to_string(),
+                                    location: ParamLocation::Fragment,
+                                    original_value: None,
+                                    context: None,
+                                },
+                                payload.to_string(),
+                                format!("Source: postMessage, Sink: {}", df.sink),
+                                RequestRecord {
+                                    method: "GET".to_string(),
+                                    url: target.url.to_string(),
+                                    headers: Vec::new(),
+                                    body: None,
+                                },
+                                target.response_status,
+                                Some(HtmlContext::ScriptBlock),
+                            ));
+                        }
+                    }
+                }
+            }
+            None
         })
         .await
         .unwrap_or(None)
