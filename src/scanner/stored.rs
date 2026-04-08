@@ -51,10 +51,8 @@ impl Scanner for StoredScanner {
         let mut findings = Vec::new();
 
         // Phase 1: Inject payloads via forms — rotate across ALL eligible fields
+        // Test both POST and GET forms (GET can store via search history, logs, etc.)
         for form in &target.forms {
-            if form.method != "POST" {
-                continue;
-            }
 
             let injectable_fields: Vec<&FormField> = form
                 .fields
@@ -88,7 +86,19 @@ impl Scanner for StoredScanner {
                     }
                 }
 
-                if let Ok(_resp) = http_client.post_form(&form.action, &form_data).await {
+                let submit_result = if form.method == "GET" {
+                    let mut url = match url::Url::parse(&form.action) {
+                        Ok(u) => u,
+                        Err(_) => continue,
+                    };
+                    for (k, v) in &form_data {
+                        url.query_pairs_mut().append_pair(k, v);
+                    }
+                    http_client.get(url.as_str()).await
+                } else {
+                    http_client.post_form(&form.action, &form_data).await
+                };
+                if let Ok(_resp) = submit_result {
                     self.injected_canaries.insert(
                         gp.canary.clone(),
                         StoredInjectionRecord {
