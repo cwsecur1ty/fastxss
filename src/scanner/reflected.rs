@@ -169,20 +169,34 @@ impl ReflectedScanner {
             };
 
             if let Some(pos) = resp_body.find(&gp.canary) {
+                // CRITICAL: verify the FULL raw payload reflects, not just the canary.
+                // Server might strip <, >, or encode them — only the canary survives.
+                if !resp_body.contains(&gp.raw_payload) {
+                    continue;
+                }
+
                 let resp_context = detect_context(&resp_body, pos);
                 let (mut severity, mut confidence) =
                     assess_reflected_severity(&resp_body, gp, &resp_context, Some(&resp_meta));
 
-                // Browser-based execution verification for high-severity findings
-                if severity >= Severity::Medium {
-                    if let Some(ref dom) = self.dom_verifier {
-                        let guard = dom.lock().await;
-                        if guard.is_available() {
-                            if guard.verify_execution(test_url.as_str()).await {
-                                severity = Severity::High;
-                                confidence = Confidence::Confirmed;
-                                info!("Execution CONFIRMED for {} param '{}'", target.url, point.name);
-                            }
+                // Browser-based execution verification GATES the finding.
+                // If browser says it doesn't execute, we don't report it at all.
+                if let Some(ref dom) = self.dom_verifier {
+                    let guard = dom.lock().await;
+                    if guard.is_available() {
+                        let executes = guard.verify_execution(test_url.as_str()).await;
+                        drop(guard);
+                        if executes {
+                            severity = Severity::High;
+                            confidence = Confidence::Confirmed;
+                            info!("Execution CONFIRMED for {} param '{}'", target.url, point.name);
+                        } else {
+                            // Browser available but payload didn't execute — skip this finding
+                            debug!(
+                                "Reflected but NOT executed: {} param '{}' — skipping FP",
+                                target.url, point.name
+                            );
+                            continue;
                         }
                     }
                 }
@@ -216,26 +230,8 @@ impl ReflectedScanner {
             }
         }
 
-        // If no targeted payloads worked but reflection exists, report as low
-        if findings.is_empty() {
-            findings.push(Finding::new(
-                ScannerType::Reflected,
-                Severity::Low,
-                Confidence::Low,
-                probe_url.to_string(),
-                point.clone(),
-                probe.payload,
-                extract_evidence(&body, canary_pos, 100),
-                RequestRecord {
-                    method: "GET".to_string(),
-                    url: probe_url.to_string(),
-                    headers: Vec::new(),
-                    body: None,
-                },
-                status,
-                Some(context),
-            ));
-        }
+        // NOTE: We no longer report "just reflects canary" as a Low finding.
+        // Canary reflection without full payload reflection = not exploitable = not a finding.
 
         findings
     }
@@ -347,6 +343,11 @@ impl ReflectedScanner {
             };
 
             if let Some(pos) = resp_body.find(&gp.canary) {
+                // Require full raw payload to reflect, not just the canary
+                if !resp_body.contains(&gp.raw_payload) {
+                    continue;
+                }
+
                 let resp_context = detect_context(&resp_body, pos);
                 let (severity, confidence) = assess_reflected_severity(&resp_body, gp, &resp_context, None);
                 let evidence = extract_evidence(&resp_body, pos, 100);
@@ -429,6 +430,11 @@ impl ReflectedScanner {
             };
 
             if let Some(pos) = resp_body.find(&gp.canary) {
+                // Require full raw payload to reflect, not just the canary
+                if !resp_body.contains(&gp.raw_payload) {
+                    continue;
+                }
+
                 let resp_context = detect_context(&resp_body, pos);
                 let (severity, confidence) = assess_reflected_severity(&resp_body, gp, &resp_context, None);
                 let evidence = extract_evidence(&resp_body, pos, 100);
@@ -520,6 +526,11 @@ impl ReflectedScanner {
             };
 
             if let Some(pos) = resp_body.find(&gp.canary) {
+                // Require full raw payload to reflect, not just the canary
+                if !resp_body.contains(&gp.raw_payload) {
+                    continue;
+                }
+
                 let resp_context = detect_context(&resp_body, pos);
                 let (severity, confidence) =
                     assess_reflected_severity(&resp_body, gp, &resp_context, None);
