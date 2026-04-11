@@ -179,6 +179,10 @@ pub struct Config {
     #[arg(long, help_heading = "Advanced")]
     pub param_wordlist: Option<PathBuf>,
 
+    /// Max mined parameters to hand off to the reflected scanner [default: 50]
+    #[arg(long, default_value = "50", help_heading = "Advanced")]
+    pub max_mined_params: usize,
+
     /// Blind XSS callback port [default: 8844]
     #[arg(long, default_value = "8844", help_heading = "Advanced")]
     pub callback_port: u16,

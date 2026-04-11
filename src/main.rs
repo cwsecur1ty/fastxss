@@ -456,9 +456,10 @@ async fn main() -> Result<()> {
         let url = target_url.clone();
         let concurrency = config.concurrency;
         let wordlist = config.param_wordlist.clone();
+        let max_mined = config.max_mined_params;
 
         discovery_handles.push(tokio::spawn(async move {
-            let miner = ParamMiner::new(client.clone(), concurrency, wordlist.as_deref());
+            let miner = ParamMiner::new(client.clone(), concurrency, wordlist.as_deref(), max_mined);
             let mined = miner.mine(&url).await;
             if mined.is_empty() {
                 return Vec::new();
@@ -468,6 +469,12 @@ async fn main() -> Result<()> {
                 "[+]".bright_green(),
                 mined.len().to_string().bright_yellow()
             );
+            println!(
+                "{} Testing {} mined params for reflection...",
+                "[*]".bright_blue(),
+                mined.len().to_string().bright_yellow()
+            );
+            let mined_count = mined.len();
             let crawl = crate::scanner::traits::CrawlResult {
                 url: url.clone(),
                 method: "GET".to_string(),
@@ -476,7 +483,14 @@ async fn main() -> Result<()> {
                 response_status: 200,
                 forms: Vec::new(),
             };
-            reflected.scan(&crawl, &engine, &client).await
+            let findings = reflected.scan(&crawl, &engine, &client).await;
+            println!(
+                "{} Mined-param scan complete ({} params tested, {} findings)",
+                "[+]".bright_green(),
+                mined_count.to_string().bright_white(),
+                findings.len().to_string().bright_white()
+            );
+            findings
         }));
     }
 

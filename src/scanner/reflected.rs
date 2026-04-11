@@ -1,7 +1,8 @@
 use async_trait::async_trait;
+use futures::stream::{FuturesUnordered, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use tracing::{debug, info};
 
 use crate::http::client::HttpClient;
@@ -10,6 +11,11 @@ use crate::scanner::context::{detect_context, is_executable_context};
 use crate::scanner::dom::DomScanner;
 use crate::scanner::traits::*;
 use crate::utils::url::set_query_param;
+
+/// Per-scan cap on how many injection points are tested in parallel.
+/// Bounded so we don't flood a single origin when one CrawlResult carries
+/// hundreds of params (e.g. a big mined-param batch).
+const PER_PARAM_CONCURRENCY: usize = 10;
 
 pub struct ReflectedScanner {
     dom_verifier: Option<Arc<Mutex<DomScanner>>>,
@@ -74,29 +80,44 @@ impl Scanner for ReflectedScanner {
         payload_engine: &PayloadEngine,
         http_client: &HttpClient,
     ) -> Vec<Finding> {
-        let mut findings = Vec::new();
+        // Fan out per-param tests concurrently, bounded by a local semaphore so
+        // a CrawlResult carrying hundreds of mined params doesn't serialise
+        // into a multi-minute stall.
+        let sem = Arc::new(Semaphore::new(PER_PARAM_CONCURRENCY));
+        let mut futs = FuturesUnordered::new();
 
         for injection_point in &target.params {
-            let point_findings = match injection_point.location {
-                ParamLocation::Query => {
-                    self.scan_query_param(target, injection_point, payload_engine, http_client)
-                        .await
-                }
-                ParamLocation::Body => {
-                    self.scan_body_param(target, injection_point, payload_engine, http_client)
-                        .await
-                }
-                ParamLocation::Header => {
-                    self.scan_header(target, injection_point, payload_engine, http_client)
-                        .await
-                }
-                ParamLocation::Cookie => {
-                    self.scan_cookie(target, injection_point, payload_engine, http_client)
-                        .await
-                }
-                _ => Vec::new(),
-            };
-            findings.extend(point_findings);
+            let sem = sem.clone();
+            futs.push(async move {
+                let _permit = sem.acquire_owned().await.ok()?;
+                let out = match injection_point.location {
+                    ParamLocation::Query => {
+                        self.scan_query_param(target, injection_point, payload_engine, http_client)
+                            .await
+                    }
+                    ParamLocation::Body => {
+                        self.scan_body_param(target, injection_point, payload_engine, http_client)
+                            .await
+                    }
+                    ParamLocation::Header => {
+                        self.scan_header(target, injection_point, payload_engine, http_client)
+                            .await
+                    }
+                    ParamLocation::Cookie => {
+                        self.scan_cookie(target, injection_point, payload_engine, http_client)
+                            .await
+                    }
+                    _ => Vec::new(),
+                };
+                Some(out)
+            });
+        }
+
+        let mut findings = Vec::new();
+        while let Some(result) = futs.next().await {
+            if let Some(point_findings) = result {
+                findings.extend(point_findings);
+            }
         }
 
         findings

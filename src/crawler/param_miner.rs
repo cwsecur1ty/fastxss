@@ -3,11 +3,21 @@ use regex::Regex;
 use std::path::Path;
 use tokio::sync::Semaphore;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::http::client::HttpClient;
 use crate::scanner::traits::{InjectionPoint, ParamLocation};
+
+/// How a mined param was detected — used for noise suppression when the
+/// len-diff signal goes off on every candidate (volatile pages).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DetectionSignal {
+    /// Canary string was reflected in the response — high confidence.
+    Reflection,
+    /// Response length changed beyond the noise threshold — lower confidence.
+    LengthDiff,
+}
 
 const BUILTIN_PARAMS: &[&str] = &[
     // Common
@@ -60,10 +70,16 @@ pub struct ParamMiner {
     client: HttpClient,
     semaphore: Arc<Semaphore>,
     custom_params: Vec<String>,
+    max_results: usize,
 }
 
 impl ParamMiner {
-    pub fn new(client: HttpClient, concurrency: usize, custom_wordlist: Option<&Path>) -> Self {
+    pub fn new(
+        client: HttpClient,
+        concurrency: usize,
+        custom_wordlist: Option<&Path>,
+        max_results: usize,
+    ) -> Self {
         let mut custom_params = Vec::new();
         if let Some(path) = custom_wordlist {
             if let Ok(contents) = std::fs::read_to_string(path) {
@@ -78,24 +94,58 @@ impl ParamMiner {
             client,
             semaphore: Arc::new(Semaphore::new(concurrency.min(20))),
             custom_params,
+            max_results,
         }
     }
 
-    /// Mine hidden parameters on a page by comparing response sizes
+    /// Mine hidden parameters on a page.
+    ///
+    /// Uses a stabilised baseline: fetches the page 3 times to measure the natural
+    /// length variance (timestamps, CSRF rotation, ads, analytics) and derives a
+    /// dynamic length-diff threshold of `max(250, 5σ)`. Canary reflection is the
+    /// high-signal path; length-diff is treated as best-effort.
+    ///
+    /// If the length-diff signal fires on an implausibly large share of candidates
+    /// the result is treated as noise and only canary-reflection hits are kept.
     pub async fn mine(&self, base_url: &Url) -> Vec<InjectionPoint> {
-        // Get baseline response + extract JS params in one fetch
-        let resp = match self.client.get(base_url.as_str()).await {
-            Ok(r) => r,
-            Err(_) => return Vec::new(),
-        };
-        let body = match resp.text().await {
-            Ok(b) => b,
-            Err(_) => return Vec::new(),
-        };
-        let baseline_len = body.len();
+        // Stabilised baseline — fetch 3x to measure natural variance
+        let mut baseline_bodies: Vec<String> = Vec::with_capacity(3);
+        for _ in 0..3 {
+            let resp = match self.client.get(base_url.as_str()).await {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            if let Ok(body) = resp.text().await {
+                baseline_bodies.push(body);
+            }
+        }
+        if baseline_bodies.is_empty() {
+            return Vec::new();
+        }
 
-        // Extract params from JS source
-        let js_params = extract_params_from_js(&body);
+        let lengths: Vec<usize> = baseline_bodies.iter().map(|b| b.len()).collect();
+        let mean = lengths.iter().sum::<usize>() as f64 / lengths.len() as f64;
+        let variance = lengths
+            .iter()
+            .map(|&l| (l as f64 - mean).powi(2))
+            .sum::<f64>()
+            / lengths.len() as f64;
+        let stddev = variance.sqrt();
+        // 5σ catches real param-induced changes above natural noise; 250-byte floor
+        // prevents false negatives on perfectly-stable pages.
+        let len_threshold = ((stddev * 5.0) as usize).max(250);
+        let baseline_len = lengths[0];
+
+        if stddev > 50.0 {
+            debug!(
+                "Baseline for {} is noisy (σ={:.0} bytes) — len-diff threshold raised to {} bytes",
+                base_url, stddev, len_threshold
+            );
+        }
+
+        // Extract params from JS source of the first baseline
+        let body = &baseline_bodies[0];
+        let js_params = extract_params_from_js(body);
 
         // Combine all candidate params, dedup
         let mut seen = std::collections::HashSet::new();
@@ -127,6 +177,11 @@ impl ParamMiner {
             .map(|(k, _)| k.to_string())
             .collect();
 
+        let total_candidates = all_params
+            .iter()
+            .filter(|p| !existing.contains(*p))
+            .count();
+
         // Test all candidates concurrently
         let mut handles = Vec::new();
         for param in all_params {
@@ -138,36 +193,67 @@ impl ParamMiner {
             let client = self.client.clone();
             let url = base_url.clone();
             let baseline = baseline_len;
+            let threshold = len_threshold;
 
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
-                test_param_static(&client, &url, &param, baseline).await
+                test_param_static(&client, &url, &param, baseline, threshold).await
             }));
         }
 
-        let mut discovered = Vec::new();
+        let mut hits: Vec<(InjectionPoint, DetectionSignal)> = Vec::new();
         for handle in handles {
-            if let Ok(Some(point)) = handle.await {
-                discovered.push(point);
+            if let Ok(Some(hit)) = handle.await {
+                hits.push(hit);
             }
         }
 
+        // Noise suppression: if length-diff fires on > 25% of candidates, the
+        // page is volatile and those results are almost certainly false positives.
+        // Keep only canary-reflection hits in that case.
+        let len_diff_count = hits
+            .iter()
+            .filter(|(_, sig)| *sig == DetectionSignal::LengthDiff)
+            .count();
+        let noise_ceiling = (total_candidates / 4).max(20);
+        let noisy = len_diff_count > noise_ceiling;
+        if noisy {
+            warn!(
+                "Parameter mining on {} flagged {} len-diff hits out of {} candidates — \
+                 treating as noise, keeping only reflection hits",
+                base_url, len_diff_count, total_candidates
+            );
+        }
+
+        let mut discovered: Vec<InjectionPoint> = hits
+            .into_iter()
+            .filter(|(_, sig)| !noisy || *sig == DetectionSignal::Reflection)
+            .map(|(point, _)| point)
+            .collect();
+
+        // Hard cap — the reflected scanner tests each of these serially per payload,
+        // so unbounded growth here blows up the total scan time.
+        if discovered.len() > self.max_results {
+            debug!(
+                "Capping mined params from {} to {} on {}",
+                discovered.len(),
+                self.max_results,
+                base_url
+            );
+            discovered.truncate(self.max_results);
+        }
+
         if !discovered.is_empty() {
-            info!("Parameter mining found {} hidden params on {}", discovered.len(), base_url);
+            info!(
+                "Parameter mining found {} hidden params on {}",
+                discovered.len(),
+                base_url
+            );
         }
 
         discovered
     }
 
-    async fn get_response_length(&self, url: &str) -> Option<usize> {
-        let resp = self.client.get(url).await.ok()?;
-        let body = resp.text().await.ok()?;
-        Some(body.len())
-    }
-
-    async fn test_param(&self, base_url: &Url, param: &str, baseline_len: usize) -> Option<InjectionPoint> {
-        test_param_static(&self.client, base_url, param, baseline_len).await
-    }
 }
 
 async fn test_param_static(
@@ -175,7 +261,8 @@ async fn test_param_static(
     base_url: &Url,
     param: &str,
     baseline_len: usize,
-) -> Option<InjectionPoint> {
+    len_threshold: usize,
+) -> Option<(InjectionPoint, DetectionSignal)> {
     let canary = "fxssmine1337";
     let mut test_url = base_url.clone();
     test_url.query_pairs_mut().append_pair(param, canary);
@@ -183,33 +270,28 @@ async fn test_param_static(
     let resp = client.get(test_url.as_str()).await.ok()?;
     let body = resp.text().await.ok()?;
 
+    let make_point = || InjectionPoint {
+        name: param.to_string(),
+        location: ParamLocation::Query,
+        original_value: None,
+        context: None,
+    };
+
     // Primary signal: canary reflects in response (high confidence)
     if body.contains(canary) {
         debug!("Hidden param found (reflects): '{}' on {}", param, base_url);
-        return Some(InjectionPoint {
-            name: param.to_string(),
-            location: ParamLocation::Query,
-            original_value: None,
-            context: None,
-        });
+        return Some((make_point(), DetectionSignal::Reflection));
     }
 
-    // Secondary signal: significant response length change
-    // Use higher threshold (200+ bytes) to avoid false positives from
-    // timestamps, CSRF tokens, ads, analytics IDs
+    // Secondary signal: length delta above the stabilised threshold
     let test_len = body.len();
     let len_diff = (test_len as isize - baseline_len as isize).unsigned_abs();
-    if len_diff > 200 {
+    if len_diff > len_threshold {
         debug!(
-            "Hidden param found (len diff {}): '{}' on {}",
-            len_diff, param, base_url
+            "Hidden param candidate (len diff {} > {}): '{}' on {}",
+            len_diff, len_threshold, param, base_url
         );
-        return Some(InjectionPoint {
-            name: param.to_string(),
-            location: ParamLocation::Query,
-            original_value: None,
-            context: None,
-        });
+        return Some((make_point(), DetectionSignal::LengthDiff));
     }
 
     None
